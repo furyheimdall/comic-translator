@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>만화 번역기</title>
+  <link rel="stylesheet" href="/style.css?v=3" />
+</head>
+<body>
+  <header>
+    <h1>만화 번역기 <small>日本語 → 한국어</small></h1>
+    <nav>
+      <a href="#/jobs" data-nav="jobs">작업</a>
+      <a href="#/new" data-nav="new">새 번역</a>
+      <a href="#/models" data-nav="models">모델 준비</a>
+      <a href="#/providers" data-nav="providers">LLM 제공자</a>
+    </nav>
+  </header>
+
+  <main id="view"></main>
+
+  <template id="login-tpl">
+    <section class="card narrow">
+      <h2>로그인</h2>
+      <form id="login-form">
+        <label>비밀번호 <input type="password" name="password" autocomplete="current-password" required /></label>
+        <button type="submit">로그인</button>
+        <p class="error" id="login-error"></p>
+      </form>
+    </section>
+  </template>
+
+  <script type="module" src="/app.js?v=7"></script>
+</body>
+</html>

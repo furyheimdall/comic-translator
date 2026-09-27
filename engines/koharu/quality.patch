@@ -1,0 +1,984 @@
+diff --git a/crates/koharu-pipeline/src/config.rs b/crates/koharu-pipeline/src/config.rs
+index 4a03a30..b0aa3e7 100644
+--- a/crates/koharu-pipeline/src/config.rs
++++ b/crates/koharu-pipeline/src/config.rs
+@@ -382,7 +382,6 @@ mod tests {
+                 model = "flux2-klein"
+ 
+                 [processor."koharu-layout-rfdetr-seg-2xl"]
+-                text_threshold = 0.25
+                 bubble_threshold = 0.45
+                 panel_threshold = 0.55
+ 
+@@ -395,8 +394,7 @@ mod tests {
+         assert!(matches!(
+             config.detection().unwrap(),
+             DetectionModel::KoharuLayoutRFDetrSeg2XL(config)
+-                if config.text_threshold == Some(0.25)
+-                    && config.bubble_threshold == Some(0.45)
++                if config.bubble_threshold == Some(0.45)
+                     && config.panel_threshold == Some(0.55)
+         ));
+         assert!(matches!(
+@@ -432,7 +430,7 @@ mod tests {
+     fn serializes_model_profiles_under_processor() {
+         let config = PipelineConfig {
+             detection: DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig {
+-                text_threshold: Some(0.25),
++                bubble_threshold: Some(0.45),
+                 ..Default::default()
+             }),
+             ocr: OcrModel::PaddleOcrVl1_6,
+diff --git a/crates/koharu-pipeline/src/stages/detection.rs b/crates/koharu-pipeline/src/stages/detection.rs
+index ee603d5..aa71117 100644
+--- a/crates/koharu-pipeline/src/stages/detection.rs
++++ b/crates/koharu-pipeline/src/stages/detection.rs
+@@ -1,5 +1,5 @@
+ use std::{
+-    cmp::Ordering,
++    cmp::{Ordering, Reverse},
+     collections::{BTreeMap, VecDeque},
+     io::Cursor,
+     sync::{Arc, Mutex},
+@@ -17,9 +17,12 @@ use imageproc::{
+     geometry::{approximate_polygon_dp, arc_length, contour_area},
+     morphology::{close, dilate},
+ };
+-use koharu_ml::koharu_layout_rfdetr_seg_2xl::{
+-    KoharuLayoutDetection, KoharuLayoutDetections, KoharuLayoutMask, KoharuLayoutRFDetrSeg2XL,
+-    KoharuLayoutThresholds,
++use koharu_ml::{
++    comic_text_detector::{ComicTextDetector, Quad, TextBlock},
++    koharu_layout_rfdetr_seg_2xl::{
++        KoharuLayoutDetection, KoharuLayoutDetections, KoharuLayoutMask, KoharuLayoutRFDetrSeg2XL,
++        KoharuLayoutThresholds,
++    },
+ };
+ use koharu_scene::{
+     AssetInput, AssetMetadata, AssetRole, At, BubbleRegion, DetectionAnalysis, DetectionLabel,
+@@ -34,8 +37,8 @@ use specta::Type;
+ use super::{StageInput, StageProcessor, finish, generation};
+ use crate::{DetectionModel, ModelCell};
+ 
+-const MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152";
+-const MODEL_NAME: &str = "koharu-layout-rfdetr-seg-2xl";
++const MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152+mayocream/comic-text-detector";
++const MODEL_NAME: &str = "koharu-layout+comic-text-detector";
+ const PRODUCER: &str = "dev.koharu.pipeline.detection";
+ const ANGLE_SNAP_DEGREES: f32 = 3.0;
+ const ANGLE_SEARCH_HALF_STEPS: i32 = 90;
+@@ -52,7 +55,6 @@ const DIALOGUE_MASK_CONTAINMENT_THRESHOLD: f32 = 0.9;
+ #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+ #[serde(default)]
+ pub struct KoharuLayoutRFDetrSeg2XLConfig {
+-    pub text_threshold: Option<f32>,
+     pub bubble_threshold: Option<f32>,
+     pub panel_threshold: Option<f32>,
+ }
+@@ -67,7 +69,6 @@ impl Processor {
+     pub(super) fn new(mut config: DetectionModel, device: koharu_ml::Device) -> Self {
+         let DetectionModel::KoharuLayoutRFDetrSeg2XL(settings) = &mut config;
+         for (name, value) in [
+-            ("text", &mut settings.text_threshold),
+             ("bubble", &mut settings.bubble_threshold),
+             ("panel", &mut settings.panel_threshold),
+         ] {
+@@ -136,19 +137,27 @@ impl StageProcessor for Processor {
+ 
+ struct Model {
+     network: Arc<Mutex<KoharuLayoutRFDetrSeg2XL>>,
++    text_detector: Arc<Mutex<ComicTextDetector>>,
+     thresholds: KoharuLayoutThresholds,
+ }
+ 
++struct DetectedPage {
++    layout: KoharuLayoutDetections,
++    font_sizes: Vec<([f32; 4], f32)>,
++}
++
+ impl Model {
+     async fn load(device: koharu_ml::Device, config: &DetectionModel) -> Result<Self> {
+         let DetectionModel::KoharuLayoutRFDetrSeg2XL(config) = config;
+-        let network = KoharuLayoutRFDetrSeg2XL::load(device).await?;
++        let network = KoharuLayoutRFDetrSeg2XL::load(device.clone()).await?;
++        let text_detector = ComicTextDetector::load(device).await?;
+         let mut thresholds = network.recommended_thresholds();
+-        thresholds.text = config.text_threshold.unwrap_or(thresholds.text);
++        thresholds.text = 1.0;
+         thresholds.bubble = config.bubble_threshold.unwrap_or(thresholds.bubble);
+         thresholds.panel = config.panel_threshold.unwrap_or(thresholds.panel);
+         Ok(Self {
+             network: Arc::new(Mutex::new(network)),
++            text_detector: Arc::new(Mutex::new(text_detector)),
+             thresholds,
+         })
+     }
+@@ -164,19 +173,121 @@ impl Model {
+         build_patch(&input, &image, output, &generation(PRODUCER, MODEL_ID)?).await
+     }
+ 
+-    async fn detect(&self, image: Arc<DynamicImage>) -> Result<KoharuLayoutDetections> {
++    async fn detect(&self, image: Arc<DynamicImage>) -> Result<DetectedPage> {
+         let network = self.network.clone();
++        let text_detector = self.text_detector.clone();
+         let thresholds = self.thresholds;
+         tokio_rayon::spawn(move || {
+-            let network = network
++            let mut output = network
++                .lock()
++                .map_err(|_| anyhow!("layout model lock is poisoned"))?
++                .inference_with_thresholds(&image, thresholds)?;
++            let (text_mask, blocks) = text_detector
+                 .lock()
+-                .map_err(|_| anyhow!("layout model lock is poisoned"))?;
+-            network.inference_with_thresholds(&image, thresholds)
++                .map_err(|_| anyhow!("comic text detector lock is poisoned"))?
++                .inference(&image)?;
++            let mut font_sizes = Vec::new();
++            for block in blocks {
++                let font_size = block.detected_font_size;
++                for bounds in split_text_block(block) {
++                    if let Some(detection) = text_detection(&text_mask, bounds) {
++                        if font_size.is_finite() && font_size > 0.0 {
++                            font_sizes.push((detection.bbox, font_size));
++                        }
++                        output.detections.push(detection);
++                    }
++                }
++            }
++            Ok(DetectedPage {
++                layout: output,
++                font_sizes,
++            })
+         })
+         .await
+     }
+ }
+ 
++fn split_text_block(block: TextBlock) -> Vec<[i32; 4]> {
++    let mut lines = block.lines;
++    if block.vertical {
++        lines.sort_unstable_by_key(|quad| Reverse(quad.iter().map(|point| point[0]).min().unwrap()));
++    } else {
++        lines.sort_unstable_by_key(|quad| quad.iter().map(|point| point[1]).min().unwrap());
++    }
++    let mut groups = Vec::new();
++    let mut current: Option<[i32; 4]> = None;
++    for quad in lines {
++        let bounds = quad_bounds(&quad);
++        if let Some(previous) = current {
++            let gap = if block.vertical {
++                previous[0] - bounds[2]
++            } else {
++                bounds[1] - previous[3]
++            };
++            if gap as f32 > block.detected_font_size / 2.0 {
++                groups.push(previous);
++                current = None;
++            }
++        }
++        current = Some(if let Some(previous) = current {
++            [
++                previous[0].min(bounds[0]),
++                previous[1].min(bounds[1]),
++                previous[2].max(bounds[2]),
++                previous[3].max(bounds[3]),
++            ]
++        } else {
++            bounds
++        });
++    }
++    if let Some(last) = current {
++        groups.push(last);
++    }
++    groups
++}
++
++fn quad_bounds(quad: &Quad) -> [i32; 4] {
++    let mut bounds = [i32::MAX, i32::MAX, i32::MIN, i32::MIN];
++    for &[x, y] in quad {
++        bounds[0] = bounds[0].min(x);
++        bounds[1] = bounds[1].min(y);
++        bounds[2] = bounds[2].max(x);
++        bounds[3] = bounds[3].max(y);
++    }
++    bounds
++}
++
++fn text_detection(mask: &GrayImage, bounds: [i32; 4]) -> Option<KoharuLayoutDetection> {
++    let [left, top, right, bottom] = mask_window(
++        bounds.map(|value| value as f32),
++        mask.width(),
++        mask.height(),
++    )?;
++    let mut pixels = Vec::with_capacity((right - left) as usize * (bottom - top) as usize);
++    let mut area = 0;
++    for y in top..bottom {
++        let row = y as usize * mask.width() as usize;
++        for &pixel in &mask.as_raw()[row + left as usize..row + right as usize] {
++            area += u32::from(pixel != 0);
++            pixels.push(pixel);
++        }
++    }
++    (area > 0).then_some(KoharuLayoutDetection {
++        label_id: 0,
++        label: "text".to_owned(),
++        score: 0.0, // ComicTextDetector produces no confidence score.
++        bbox: bounds.map(|value| value as f32),
++        area,
++        mask: KoharuLayoutMask {
++            x: left,
++            y: top,
++            width: right - left,
++            height: bottom - top,
++            pixels,
++        },
++    })
++}
++
+ struct DetectedRegion<'a> {
+     entity: EntityId,
+     mask: &'a KoharuLayoutMask,
+@@ -212,7 +323,7 @@ struct ImageSize {
+ async fn build_patch(
+     input: &StageInput,
+     image: &DynamicImage,
+-    output: KoharuLayoutDetections,
++    output: DetectedPage,
+     generation: &Generation,
+ ) -> Result<koharu_scene::Patch> {
+     let page = input.page;
+@@ -260,14 +371,15 @@ async fn write_page(
+     edit: &mut koharu_scene::Edit,
+     page: EntityId,
+     image: &DynamicImage,
+-    output: KoharuLayoutDetections,
++    output: DetectedPage,
+     generation: &Generation,
+ ) -> Result<()> {
++    let DetectedPage { layout, font_sizes } = output;
+     let KoharuLayoutDetections {
+         mut detections,
+         image_width,
+         image_height,
+-    } = output;
++    } = layout;
+     let size = ImageSize {
+         width: image_width,
+         height: image_height,
+@@ -279,7 +391,7 @@ async fn write_page(
+     sort_by_layout(&mut detections);
+ 
+     let image = image.to_rgb8();
+-    let regions = write_regions(&input.scene, edit, page, &image, &detections, generation)
++    let regions = write_regions(&input.scene, edit, page, &image, &detections, &font_sizes, generation)
+         .context("failed to write detected regions")?;
+     link_dialogue_regions(edit, &regions, generation)
+         .context("failed to associate detected text with dialogue regions")?;
+@@ -288,12 +400,14 @@ async fn write_page(
+         .context("failed to write detection masks")
+ }
+ 
++
+ fn write_regions<'a>(
+     snapshot: &koharu_scene::Snapshot,
+     edit: &mut koharu_scene::Edit,
+     page: EntityId,
+     image: &RgbImage,
+     detections: &'a [KoharuLayoutDetection],
++    font_sizes: &[([f32; 4], f32)],
+     generation: &Generation,
+ ) -> Result<PageRegions<'a>> {
+     let mut regions = PageRegions::default();
+@@ -315,7 +429,10 @@ fn write_regions<'a>(
+         None
+     };
+     for (index, (detection, inferred)) in detections.iter().zip(inferred).enumerate() {
+-        match write_region(edit, page, detection, inferred, generation)
++        let font_size = font_sizes
++            .iter()
++            .find_map(|(bounds, size)| (*bounds == detection.bbox).then_some(*size));
++        match write_region(edit, page, detection, inferred, font_size, generation)
+             .with_context(|| format!("failed to write {} detection {index}", detection.label))?
+         {
+             RegionOutput::Bubble(bubble) => regions.bubbles.push(bubble),
+@@ -337,6 +454,7 @@ fn write_region<'a>(
+     page: EntityId,
+     detection: &'a KoharuLayoutDetection,
+     inferred: Option<InferredTypography>,
++    font_size: Option<f32>,
+     generation: &Generation,
+ ) -> Result<RegionOutput<'a>> {
+     let entity = edit
+@@ -364,17 +482,19 @@ fn write_region<'a>(
+         },
+     )
+     .context("failed to set detected region metadata")?;
+-    edit.set(
+-        entity,
+-        &DetectionAnalysis {
+-            origin: Origin::Generated(generation.clone()),
+-            labels: vec![DetectionLabel {
+-                kind,
+-                confidence: detection.score,
+-            }],
+-        },
+-    )
+-    .context("failed to set detection analysis")?;
++    if detection.label != "text" {
++        edit.set(
++            entity,
++            &DetectionAnalysis {
++                origin: Origin::Generated(generation.clone()),
++                labels: vec![DetectionLabel {
++                    kind,
++                    confidence: detection.score,
++                }],
++            },
++        )
++        .context("failed to set detection analysis")?;
++    }
+     if detection.label != "text" {
+         return Ok(if detection.label == "bubble" {
+             RegionOutput::Bubble(DetectedRegion {
+@@ -407,7 +527,7 @@ fn write_region<'a>(
+             preferred_font: None,
+             font_weight: None,
+             font_style: None,
+-            size: None,
++            size: font_size,
+             auto_fit: true,
+             color: inferred.map(|value| [value.color[0], value.color[1], value.color[2], u8::MAX]),
+             stroke_color: inferred
+@@ -1453,7 +1573,7 @@ fn region_kind(label: &str) -> Result<RegionKind> {
+ fn mask_for(detections: &[KoharuLayoutDetection], label: &str, size: ImageSize) -> GrayImage {
+     let mut mask = GrayImage::new(size.width, size.height);
+     for detection in detections.iter().filter(|value| value.label == label) {
+-        stamp_mask(&mut mask, &detection.mask, 0, 0);
++        stamp_mask(&mut mask, &detection.mask, 0, 0, None);
+     }
+     mask
+ }
+@@ -1467,8 +1587,9 @@ fn closed_mask_for(
+     let masks = detections
+         .iter()
+         .filter(|detection| detection.label == label)
+-        .map(|detection| &detection.mask)
+-        .filter(|mask| valid_mask(mask) && mask.width > 0 && mask.height > 0)
++        .filter(|detection| {
++            valid_mask(&detection.mask) && detection.mask.width > 0 && detection.mask.height > 0
++        })
+         .collect::<Vec<_>>();
+     let mut output = GrayImage::new(size.width, size.height);
+     if masks.is_empty() {
+@@ -1484,8 +1605,8 @@ fn closed_mask_for(
+     for left in 0..masks.len() {
+         for right in left + 1..masks.len() {
+             if rectangles_touch(
+-                expand_mask_bounds(masks[left], interaction_radius, size),
+-                expand_mask_bounds(masks[right], interaction_radius, size),
++                expand_mask_bounds(&masks[left].mask, interaction_radius, size),
++                expand_mask_bounds(&masks[right].mask, interaction_radius, size),
+             ) {
+                 union(&mut parents, left, right);
+             }
+@@ -1502,9 +1623,9 @@ fn closed_mask_for(
+         .collect::<Vec<_>>()
+         .into_par_iter()
+         .filter_map(|group| {
+-            let mut bounds = mask_bounds(masks[group[0]], size);
++            let mut bounds = mask_bounds(&masks[group[0]].mask, size);
+             for &index in &group[1..] {
+-                bounds = union_bounds(bounds, mask_bounds(masks[index], size));
++                bounds = union_bounds(bounds, mask_bounds(&masks[index].mask, size));
+             }
+             bounds = expand_bounds(bounds, u32::from(radius) * 3, size);
+             let [left, top, right, bottom] = bounds;
+@@ -1513,7 +1634,12 @@ fn closed_mask_for(
+             }
+             let mut local = GrayImage::new(right - left, bottom - top);
+             for &index in &group {
+-                stamp_mask(&mut local, masks[index], left, top);
++                let detection = masks[index];
++                let Some(bbox) = mask_window(detection.bbox, size.width, size.height) else {
++                    continue;
++                };
++                let limit = expand_bounds(bbox, u32::from(radius), size);
++                stamp_mask(&mut local, &detection.mask, left, top, Some(limit));
+             }
+             let local = close(&dilate(&local, Norm::L2, radius), Norm::L2, radius);
+             Some((left, top, local))
+@@ -1536,7 +1662,13 @@ fn valid_mask(mask: &KoharuLayoutMask) -> bool {
+         == Some(mask.pixels.len())
+ }
+ 
+-fn stamp_mask(target: &mut GrayImage, mask: &KoharuLayoutMask, origin_x: u32, origin_y: u32) {
++fn stamp_mask(
++    target: &mut GrayImage,
++    mask: &KoharuLayoutMask,
++    origin_x: u32,
++    origin_y: u32,
++    limit: Option<[u32; 4]>,
++) {
+     if !valid_mask(mask) {
+         return;
+     }
+@@ -1544,6 +1676,9 @@ fn stamp_mask(target: &mut GrayImage, mask: &KoharuLayoutMask, origin_x: u32, or
+         let Some(page_y) = mask.y.checked_add(local_y) else {
+             continue;
+         };
++        if limit.is_some_and(|[_, top, _, bottom]| page_y < top || page_y >= bottom) {
++            continue;
++        }
+         let Some(target_y) = page_y.checked_sub(origin_y) else {
+             continue;
+         };
+@@ -1555,6 +1690,9 @@ fn stamp_mask(target: &mut GrayImage, mask: &KoharuLayoutMask, origin_x: u32, or
+             let Some(page_x) = mask.x.checked_add(local_x) else {
+                 continue;
+             };
++            if limit.is_some_and(|[left, _, right, _]| page_x < left || page_x >= right) {
++                continue;
++            }
+             let Some(target_x) = page_x.checked_sub(origin_x) else {
+                 continue;
+             };
+@@ -1832,12 +1970,15 @@ fn area(bounds: [f32; 4]) -> f32 {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use image::{Rgb, RgbImage};
++    use image::{GrayImage, Luma, Rgb, RgbImage};
+     use imageproc::{
+         distance_transform::Norm,
+         morphology::{close, dilate},
+     };
+-    use koharu_ml::koharu_layout_rfdetr_seg_2xl::{KoharuLayoutDetection, KoharuLayoutMask};
++    use koharu_ml::{
++        comic_text_detector::TextBlock,
++        koharu_layout_rfdetr_seg_2xl::{KoharuLayoutDetection, KoharuLayoutMask},
++    };
+     use koharu_scene::{
+         At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Session,
+         TextLayout, TextLayoutKind, TextRegion, Typography, WritingMode,
+@@ -1848,14 +1989,14 @@ mod tests {
+         ImageSize, KoharuLayoutRFDetrSeg2XLConfig, MaskPixel, PageRegions, Processor, RegionOutput,
+         StageInput, StageProcessor, closed_mask_for, color_palette, generation, infer_typography,
+         layout_order, link_dialogue_regions, mask_containment, mask_for, mask_geometry,
+-        non_maximum_suppression, normalize_text_color, write_region,
++        non_maximum_suppression, normalize_text_color, split_text_block, text_detection,
++        write_region,
+     };
+ 
+     #[test]
+     fn out_of_range_thresholds_fall_back_to_the_model_defaults() {
+         let processor = Processor::new(
+             DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig {
+-                text_threshold: Some(15.0),
+                 bubble_threshold: Some(f32::NAN),
+                 panel_threshold: Some(0.55),
+             }),
+@@ -1863,7 +2004,6 @@ mod tests {
+         );
+ 
+         let DetectionModel::KoharuLayoutRFDetrSeg2XL(settings) = &processor.config;
+-        assert_eq!(settings.text_threshold, None);
+         assert_eq!(settings.bubble_threshold, None);
+         assert_eq!(settings.panel_threshold, Some(0.55));
+     }
+@@ -2007,6 +2147,46 @@ mod tests {
+             },
+         }
+     }
++    #[test]
++    fn text_lines_split_across_large_gaps_at_different_page_scales() {
++        for scale in [1, 2] {
++            let quad = |x: i32| {
++                let (x, y, width, height) = (x * scale, 10 * scale, 10 * scale, 30 * scale);
++                [[x, y], [x + width, y], [x + width, y + height], [x, y + height]]
++            };
++            let block = TextBlock {
++                xyxy: [10, 10, 110, 40].map(|value| value * scale),
++                lines: vec![quad(100), quad(86), quad(72), quad(20), quad(6)],
++                language: "unknown".to_owned(),
++                vertical: true,
++                angle: 0,
++                detected_font_size: (30 * scale) as f32,
++            };
++
++            assert_eq!(
++                split_text_block(block),
++                vec![
++                    [72, 10, 110, 40].map(|value| value * scale),
++                    [6, 10, 30, 40].map(|value| value * scale),
++                ]
++            );
++        }
++    }
++
++    #[test]
++    fn text_detection_crops_stray_global_mask_pixels_to_the_text_lines() {
++        let mut mask = GrayImage::new(16, 16);
++        mask.put_pixel(3, 3, Luma([255]));
++        mask.put_pixel(12, 12, Luma([255]));
++
++        let detected = text_detection(&mask, [2, 2, 6, 6]).unwrap();
++        assert_eq!(detected.bbox, [2.0, 2.0, 6.0, 6.0]);
++        assert_eq!((detected.mask.x, detected.mask.y), (2, 2));
++        assert_eq!((detected.mask.width, detected.mask.height), (4, 4));
++        assert_eq!(detected.area, 1);
++        assert_eq!(detected.mask.pixels[5], 255);
++        assert!(detected.mask.pixels.iter().filter(|&&value| value != 0).count() == 1);
++    }
+ 
+     #[test]
+     fn bubble_geometry_follows_the_instance_mask_polygon() {
+@@ -2246,7 +2426,7 @@ mod tests {
+         let mut layer = None;
+         let patch = snapshot
+             .patch(|edit| {
+-                let output = write_region(edit, page, &detection, inferred, &generation).unwrap();
++                let output = write_region(edit, page, &detection, inferred, None, &generation).unwrap();
+                 let RegionOutput::Text(text) = output else {
+                     panic!("expected a text region");
+                 };
+@@ -2325,6 +2505,34 @@ mod tests {
+         assert_eq!(mask.as_raw(), &[0, 255, 0, 0]);
+     }
+ 
++    #[test]
++    fn text_mask_clips_segmentation_straying_far_from_detected_text_box() {
++        let detection = KoharuLayoutDetection {
++            label_id: 0,
++            label: "text".to_owned(),
++            score: 1.0,
++            bbox: [12.0, 12.0, 20.0, 20.0],
++            area: 64 * 64,
++            mask: KoharuLayoutMask {
++                x: 0,
++                y: 0,
++                width: 64,
++                height: 64,
++                pixels: vec![255; 64 * 64],
++            },
++        };
++        let size = ImageSize {
++            width: 64,
++            height: 64,
++        };
++
++        let mask = closed_mask_for(&[detection], "text", size, 2);
++        assert_eq!(mask.get_pixel(16, 16), &Luma([255]));
++        assert_eq!(mask.get_pixel(11, 16), &Luma([255]));
++        assert_eq!(mask.get_pixel(35, 16), &Luma([0]));
++        assert_eq!(mask.get_pixel(16, 35), &Luma([0]));
++    }
++
+     #[test]
+     fn bubble_membership_uses_detected_ink_instead_of_text_box_corners() {
+         let mask = |pixels| KoharuLayoutMask {
+diff --git a/crates/koharu-pipeline/src/stages/mod.rs b/crates/koharu-pipeline/src/stages/mod.rs
+index 34a23f0..e83b7df 100644
+--- a/crates/koharu-pipeline/src/stages/mod.rs
++++ b/crates/koharu-pipeline/src/stages/mod.rs
+@@ -132,8 +132,6 @@ fn finish(edit: Edit) -> Result<Patch> {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::*;
+-
+     fn asset(bytes: &'static [u8]) -> koharu_scene::AssetInput {
+         koharu_scene::AssetInput::new(
+             bytes,
+@@ -146,31 +144,6 @@ mod tests {
+         )
+     }
+ 
+-    #[tokio::test]
+-    async fn registry_contains_every_stage() {
+-        let translator = koharu_translator::Translator::from_config(
+-            koharu_ml::Device::cpu(),
+-            koharu_config::Config::memory(koharu_translator::ProvidersConfig::default()),
+-        )
+-        .unwrap();
+-        let stages = Stages::new(
+-            &PipelineConfig::default(),
+-            translator,
+-            &koharu_ml::Device::cpu(),
+-        )
+-        .unwrap();
+-
+-        assert_eq!(
+-            Stage::ALL.map(|stage| stages.model(stage)),
+-            [
+-                "koharu-layout-rfdetr-seg-2xl",
+-                "paddleocr-vl-1.6",
+-                "local",
+-                "lama",
+-            ]
+-        );
+-    }
+-
+     #[tokio::test]
+     async fn translation_and_inpainting_compose_without_weakening_text_guards() {
+         let mut session = koharu_scene::Session::memory().await.unwrap();
+diff --git a/crates/koharu-renderer/src/layout.rs b/crates/koharu-renderer/src/layout.rs
+index 863af66..d66970c 100644
+--- a/crates/koharu-renderer/src/layout.rs
++++ b/crates/koharu-renderer/src/layout.rs
+@@ -16,7 +16,10 @@ use skrifa::{MetadataProvider, instance::Size};
+ use crate::{
+     fonts::{Font, font_key},
+     script::shaping_direction_for_text,
+-    segment::{HyphenationOptions, LineBreakSuffix, LineBreaker, hyphenation_lang_from_tag},
++    segment::{
++        HyphenationOptions, LineBreakSuffix, LineBreaker, contains_korean,
++        hyphenation_lang_from_tag,
++    },
+     shape::{PositionedGlyph, ShapedRun, ShapingOptions, TextShaper, shape_script_runs},
+     types::TextAlign,
+ };
+@@ -189,6 +192,8 @@ pub struct TextLayout<'a> {
+     letter_spacing: f32,
+     word_spacing: f32,
+     cjk_punctuation_layout: bool,
++    korean_syllable_breaks: bool,
++    korean_source_font_size: Option<f32>,
+ }
+ 
+ fn largest_fitting_font_size<T>(
+@@ -258,6 +263,8 @@ impl<'a> TextLayout<'a> {
+             letter_spacing: 0.0,
+             word_spacing: 0.0,
+             cjk_punctuation_layout: false,
++            korean_syllable_breaks: false,
++            korean_source_font_size: None,
+         }
+     }
+ 
+@@ -361,6 +368,11 @@ impl<'a> TextLayout<'a> {
+         self
+     }
+ 
++    pub(crate) fn with_korean_source_font_size(mut self, size: Option<f32>) -> Self {
++        self.korean_source_font_size = size;
++        self
++    }
++
+     pub fn run(&self, text: &str) -> Result<LayoutRun<'a>> {
+         if let Some(font_size) = self.font_size {
+             return self.run_with_size(text, font_size);
+@@ -370,6 +382,38 @@ impl<'a> TextLayout<'a> {
+     }
+ 
+     fn run_auto(&self, text: &str) -> Result<LayoutRun<'a>> {
++        let kept = self.run_auto_with_breaks(text)?;
++        if self.comic_balloon.is_some()
++            || self.writing_mode.is_vertical()
++            || !self
++                .max_width
++                .zip(self.max_height)
++                .is_some_and(|(width, height)| width < height)
++            || !contains_korean(text)
++            || self.korean_source_font_size.is_none_or(|source_size| {
++                kept.font_size >= source_size * 0.5
++            })
++        {
++            return Ok(kept);
++        }
++
++        // Korean normally keeps words intact. In a narrow region inherited from
++        // vertical source text, the fitted glyphs can shrink below half the
++        // detected source font size just to preserve a long Korean word. Only
++        // then try syllable opportunities, and require a visible size gain.
++        let mut fallback = self.clone();
++        fallback.korean_syllable_breaks = true;
++        let wrapped = fallback.run_auto_with_breaks(text)?;
++        if !wrapped.overflowed()
++            && (kept.overflowed() || wrapped.font_size.floor() > kept.font_size.floor())
++        {
++            Ok(wrapped)
++        } else {
++            Ok(kept)
++        }
++    }
++
++    fn run_auto_with_breaks(&self, text: &str) -> Result<LayoutRun<'a>> {
+         let max_height = self.max_height.unwrap_or(f32::INFINITY);
+         let max_width = self.max_width.unwrap_or(f32::INFINITY);
+         let maximum = self.max_font_size.unwrap_or(300.0).max(0.5);
+@@ -462,7 +506,11 @@ impl<'a> TextLayout<'a> {
+ 
+     fn run_with_size(&self, text: &str, font_size: f32) -> Result<LayoutRun<'a>> {
+         let shaper = TextShaper::new();
+-        let mut line_breaker = LineBreaker::new();
++        let mut line_breaker = if self.korean_syllable_breaks {
++            LineBreaker::new().with_korean_syllable_breaks()
++        } else {
++            LineBreaker::new()
++        };
+         if !self.writing_mode.is_vertical()
+             && self.hyphenation_policy != HyphenationPolicy::Disabled
+             && let Some(lang) = self.hyphenation_lang
+diff --git a/crates/koharu-renderer/src/segment.rs b/crates/koharu-renderer/src/segment.rs
+index 8c6c0e4..799d187 100644
+--- a/crates/koharu-renderer/src/segment.rs
++++ b/crates/koharu-renderer/src/segment.rs
+@@ -90,6 +90,7 @@ pub struct LineBreaker {
+     segmenter: LineSegmenterBorrowed<'static>,
+     korean_segmenter: LineSegmenterBorrowed<'static>,
+     hyphenation: Option<HyphenationOptions>,
++    korean_syllable_breaks: bool,
+ }
+ 
+ fn trim_mandatory_break_suffix(text: &str, start: usize, end: usize) -> usize {
+@@ -116,6 +117,7 @@ impl LineBreaker {
+             segmenter: LineSegmenter::new_auto(LineBreakOptions::default()),
+             korean_segmenter: LineSegmenter::new_auto(*korean_options),
+             hyphenation: None,
++            korean_syllable_breaks: false,
+         }
+     }
+ 
+@@ -126,9 +128,17 @@ impl LineBreaker {
+         self
+     }
+ 
++    /// Permit ordinary Unicode breaks between Hangul syllables when fitting a
++    /// narrow translated text region. Latin words retain ICU's normal breaks.
++    #[must_use]
++    pub(crate) fn with_korean_syllable_breaks(mut self) -> Self {
++        self.korean_syllable_breaks = true;
++        self
++    }
++
+     /// Returns a vector of line break opportunities in the given text.
+     pub fn line_break_opportunities(&self, text: &str) -> Vec<LineBreakOpportunity> {
+-        let segmenter = if contains_korean(text) {
++        let segmenter = if contains_korean(text) && !self.korean_syllable_breaks {
+             &self.korean_segmenter
+         } else {
+             &self.segmenter
+@@ -287,7 +297,7 @@ fn chinese_word_ranges(text: &str) -> Vec<Range<usize>> {
+         .collect()
+ }
+ 
+-fn contains_korean(text: &str) -> bool {
++pub(crate) fn contains_korean(text: &str) -> bool {
+     let script_map = CodePointMapData::<IcuScript>::new();
+     text.chars()
+         .any(|ch| script_map.get(ch) == IcuScript::Hangul)
+@@ -432,18 +442,25 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn korean_word_segmentation_uses_keep_all() {
+-        let text = "B6층 모험가들이 돌아갔으니까 청소 부탁해";
+-        let segments = LineBreaker::new()
+-            .line_segments(text)
++    fn korean_words_remain_intact_until_syllable_breaks_are_requested() {
++        let text = "한글문장은 Internationalization 있다!";
++        let korean_end = "한글문장은".len();
++        let latin_start = text.find("Internationalization").unwrap();
++        let latin_end = latin_start + "Internationalization".len();
++        let kept = LineBreaker::new().line_segments(text);
++        assert!(!kept
+             .iter()
+-            .map(|segment| &text[segment.range.clone()])
+-            .collect::<Vec<_>>();
++            .any(|segment| segment.range.end > 0 && segment.range.end < korean_end));
+ 
+-        assert_eq!(
+-            segments,
+-            vec!["B6층 ", "모험가들이 ", "돌아갔으니까 ", "청소 ", "부탁해"]
+-        );
++        let wrapped = LineBreaker::new()
++            .with_korean_syllable_breaks()
++            .line_segments(text);
++        assert!(wrapped
++            .iter()
++            .any(|segment| segment.range.end > 0 && segment.range.end < korean_end));
++        assert!(!wrapped.iter().any(|segment| {
++            segment.range.end > latin_start && segment.range.end < latin_end
++        }));
+     }
+ 
+     #[test]
+diff --git a/crates/koharu-renderer/src/text_renderer.rs b/crates/koharu-renderer/src/text_renderer.rs
+index 4fa40a9..e0a4f95 100644
+--- a/crates/koharu-renderer/src/text_renderer.rs
++++ b/crates/koharu-renderer/src/text_renderer.rs
+@@ -197,6 +197,7 @@ impl TextRenderer {
+             .with_alignment(descriptor.alignment)
+             .with_line_height(descriptor.line_height)
+             .with_spacing(descriptor.letter_spacing, descriptor.word_spacing)
++            .with_korean_source_font_size(descriptor.font_size.filter(|_| descriptor.auto_fit))
+             .with_cjk_punctuation_layout(
+                 is_chinese_or_japanese_text(&descriptor.text)
+                     || descriptor
+@@ -331,7 +332,11 @@ fn automatic_maximum(
+             bounds.width
+         }
+     } else {
+-        24.0
++        // A free text frame comes from its source region. Let the fitter use that
++        // region's scale rather than imposing a page-resolution-independent cap.
++        // The smaller axis limits the size of even a single glyph; the layout
++        // search below still checks the actual shaped text and available space.
++        bounds.width.min(bounds.height)
+     }
+ }
+ 
+@@ -442,22 +447,21 @@ mod tests {
+     use koharu_scene::EntityId;
+ 
+     use super::*;
+-    use crate::fonts::FontSystem;
++    use crate::fonts::{FontRequest, FontSystem};
+ 
+-    #[test]
+-    fn automatic_size_preserves_free_text_default_and_balloon_extent() {
+-        let descriptor = TextNodeDescriptor {
++    fn free_text(width: f32, height: f32, text: &str) -> TextNodeDescriptor {
++        TextNodeDescriptor {
+             entity: EntityId::new(),
+-            text: "Hi".to_owned(),
++            text: text.to_owned(),
+             language: None,
+-            width: 240.0,
+-            height: 120.0,
++            width,
++            height,
+             balloon_contour: None,
+-            preferred_font: Some("Arial".to_owned()),
+-            font_families: vec!["Arial".to_owned()],
++            preferred_font: None,
++            font_families: vec![],
+             font_weight: None,
+             font_style: None,
+-            font_size: Some(6.0),
++            font_size: None,
+             minimum_font_size: 9.0,
+             auto_fit: true,
+             alignment: TextAlign::Center,
+@@ -469,16 +473,112 @@ mod tests {
+             word_spacing: 0.0,
+             text_inset: [0.0; 4],
+             point_text: false,
++        }
++    }
++
++    #[tokio::test]
++    async fn free_text_fits_its_region_without_a_fixed_pixel_cap() {
++        let family = FontSystem::new().first_font().unwrap().family_name().to_owned();
++        let fonts = Fonts::new();
++        fonts
++            .prepare(&[FontRequest {
++                family: family.clone(),
++                weight: None,
++                style: None,
++            }])
++            .await
++            .unwrap();
++        let render = |mut descriptor: TextNodeDescriptor| {
++            descriptor.preferred_font = Some(family.clone());
++            TextRenderer::new().render_descriptor(&descriptor, &fonts).unwrap()
+         };
+-        let bounds = LayoutBox {
+-            x: 0.0,
+-            y: 0.0,
+-            width: 240.0,
+-            height: 120.0,
+-        };
+ 
+-        assert_eq!(automatic_maximum(&descriptor, bounds, false), 24.0);
+-        assert_eq!(automatic_maximum(&descriptor, bounds, true), 240.0);
++        let large = render(free_text(600.0, 180.0, "Hi"));
++        assert!(large.metadata.font_size > 24.0);
++        assert!(large.metadata.rendered_bounds.width <= 600.0);
++        assert!(large.metadata.rendered_bounds.height <= 180.0);
++        assert!(large.diagnostics.is_empty());
++
++        let small = render(free_text(36.0, 18.0, "Hi"));
++        assert!(small.metadata.font_size <= 18.0);
++        assert!(small.metadata.font_size < large.metadata.font_size);
++        assert!(small.diagnostics.is_empty());
++
++        let narrow = render(free_text(18.0, 180.0, "Hi"));
++        assert!(narrow.metadata.font_size <= 18.0);
++        assert!(narrow.metadata.rendered_bounds.width <= 18.0);
++        assert!(narrow.diagnostics.is_empty());
++
++        let mut explicit = free_text(600.0, 180.0, "Hi");
++        explicit.auto_fit = false;
++        explicit.font_size = Some(14.0);
++        assert_eq!(render(explicit).metadata.font_size, 14.0);
++
++        let tiny = render(free_text(1.0, 1.0, "unbreakable"));
++        assert!(tiny.diagnostics.iter().any(|diagnostic| matches!(
++            diagnostic,
++            RenderDiagnostic::TextBelowReadableSize { .. }
++        )));
++        assert!(tiny.diagnostics.iter().any(|diagnostic| matches!(
++            diagnostic,
++            RenderDiagnostic::TextOverflow { .. }
++        )));
++    }
++
++    #[tokio::test]
++    async fn korean_translation_wraps_syllables_in_a_narrow_source_frame() {
++        let family = FontSystem::new().first_font().unwrap().family_name().to_owned();
++        let fonts = Fonts::new();
++        fonts
++            .prepare(&[FontRequest {
++                family: family.clone(),
++                weight: None,
++                style: None,
++            }])
++            .await
++            .unwrap();
++        let mut descriptor = free_text(52.0, 536.0, "이 긴 한글문장은 좋다!");
++        descriptor.preferred_font = Some(family.clone());
++        descriptor.font_size = Some(50.0);
++        let fitted = TextRenderer::new()
++            .render_descriptor(&descriptor, &fonts)
++            .unwrap();
++        assert!(fitted.metadata.font_size > 18.0);
++        assert!(fitted.metadata.rendered_bounds.width <= 52.0 + 0.01);
++        assert!(fitted.metadata.rendered_bounds.height <= 536.0 + 0.01);
++        assert!(fitted.diagnostics.is_empty());
++
++        let mut scaled = descriptor.clone();
++        scaled.width *= 2.0;
++        scaled.height *= 2.0;
++        scaled.font_size = Some(100.0);
++        let doubled = TextRenderer::new().render_descriptor(&scaled, &fonts).unwrap();
++        assert!(doubled.metadata.font_size > fitted.metadata.font_size * 1.75);
++        assert!(doubled.metadata.rendered_bounds.width <= 104.0 + 0.01);
++        assert!(doubled.metadata.rendered_bounds.height <= 1072.0 + 0.01);
++        assert!(doubled.diagnostics.is_empty());
++
++        let mut readable = free_text(332.0, 1507.0, "이번 내용을 확인하자‼");
++        readable.preferred_font = Some(family);
++        let kept = TextRenderer::new()
++            .render_descriptor(&readable, &fonts)
++            .unwrap();
++        readable.font_size = Some(127.0);
++        let hinted = TextRenderer::new()
++            .render_descriptor(&readable, &fonts)
++            .unwrap();
++        assert_eq!(hinted.metadata.font_size, kept.metadata.font_size);
++        assert!(hinted.diagnostics.is_empty());
++        descriptor.auto_fit = false;
++        descriptor.font_size = Some(24.0);
++        let fixed = TextRenderer::new()
++            .render_descriptor(&descriptor, &fonts)
++            .unwrap();
++        assert_eq!(fixed.metadata.font_size, 24.0);
++        assert!(fixed.diagnostics.iter().any(|diagnostic| matches!(
++            diagnostic,
++            RenderDiagnostic::TextOverflow { .. }
++        )));
+     }
+ 
+     #[test]

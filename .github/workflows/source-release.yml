@@ -1,0 +1,29 @@
+name: Source release checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked app and test dependencies
+        run: uv sync --locked --group dev
+      - name: Run CPU-compatible application tests
+        run: uv run --locked python -m pytest -q
+      - name: Inspect source and Git index for private content
+        run: |
+          python scripts/package_release.py --check-only
+          python scripts/package_release.py --check-staged
+      - name: Build allowlisted source tarball
+        run: python scripts/package_release.py --output-dir dist

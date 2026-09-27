@@ -1,0 +1,28 @@
+[project]
+name = "comic-translator"
+version = "0.1.0"
+description = "Personal Japanese → Korean manga translator (web UI, batch jobs, pluggable image engines and LLM providers)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+    "cryptography>=43",
+    "pillow>=10",
+    "pypdfium2>=5.13.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.uv]
+# Deploy the source tree with its web assets and external-engine adapters.
+# A Python wheel alone is not a complete service installation.
+package = false

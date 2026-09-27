@@ -1,0 +1,227 @@
+# comic-translator
+
+일본어 만화 원고의 글자를 검출하고, LLM으로 한국어로 번역한 뒤 원문을 지우고 다시 식자하는 개인용 웹 서비스입니다.
+
+**저장소:** <https://github.com/furyheimdall/comic-translator>
+
+이 배포물은 **Linux 소스 설치 패키지**입니다. 웹 앱·설치기·엔진 연동 코드가 포함되며, GPU 엔진·모델·폰트는 선택한 설치 과정에서 별도로 받습니다. 독립 실행 바이너리, Docker 이미지, 모델이 포함된 오프라인 패키지 또는 Python wheel 배포물이 아닙니다.
+
+## 주요 기능
+
+- 이미지 여러 장, ZIP/CBZ, PDF 업로드와 순차 작업 큐
+- 원본/번역 비교 뷰어, 진행률·작업 로그, ZIP/CBZ 다운로드
+- Koharu / MangaTranslator 엔진 선택
+- 로컬 OpenAI 호환 서버, OpenAI, xAI, Anthropic, Gemini 연결
+- 작품별 번역 지침과 용어집 전달
+- LLM의 일시적 오류 자동 재시도와 실패·미완료 페이지만 재실행
+- 재시도 시 LLM 제공자·모델 변경, 완료 페이지 보존
+
+Koharu는 RF-DETR로 말풍선·컷·효과음을, Comic Text Detector로 본문과 지우기 마스크를 검출합니다. 고해상도 원고의 말풍선 밖 글자에 24px 고정 상한을 두지 않으며, 한국어 단어를 유지했을 때 원문 글꼴 크기의 절반 미만으로 작아지는 좁은 영역에서만 음절 줄바꿈을 시도합니다. 작은 신문 글씨·손글씨·간판·효과음 일부는 누락되거나 원문이 남을 수 있습니다. 자동 번역 결과는 검토가 필요합니다.
+
+## 운영 데이터는 배포하지 않습니다
+
+**Git 저장소와 소스 패키지에는 원고, 번역 결과, DB, 로그, 비밀번호, API 키·OAuth 토큰, 암호화 키를 포함하지 않습니다.** 모델·폰트·외부 엔진 복제본·가상환경·빌드 산출물도 제외합니다.
+
+- `.gitignore`: 운영 파일을 기본적으로 Git에서 제외
+- `scripts/package_release.py`: 허용한 소스 경로만 패키징하고 비밀정보 패턴 검사
+- `--check-staged`: 작업 디렉터리가 아니라 **실제로 커밋될 Git index의 파일 경로와 내용** 검사
+- `.env.example`: 비밀값이 없는 환경 변수 참고용 예시. 앱은 `.env`를 자동으로 읽지 않습니다.
+
+검사는 실수 방지 장치이지 모든 비밀정보를 찾아내는 보증은 아닙니다. 공개 전 커밋 대상도 직접 검토하세요. 이미 Git에 커밋된 비밀정보는 `.gitignore`만 추가해도 이력에서 사라지지 않습니다.
+
+## 지원 환경과 준비물
+
+현재 GPU 번역을 확인한 환경은 **Ubuntu 24.04 / NVIDIA DGX Spark(aarch64), NVIDIA 드라이버 580 / CUDA 13.0**입니다. 다른 Linux·GPU 조합은 별도 검증이 필요하며, Windows/macOS용 서비스 설치는 지원하지 않습니다.
+
+| 구분 | 필요 항목 |
+|---|---|
+| 웹 앱 | Python 3.12 이상, [uv](https://docs.astral.sh/uv/getting-started/installation/), Git |
+| 서비스 등록 | systemd 사용자 서비스와 사용자 세션 버스. 없으면 `--no-systemd` 사용 |
+| Koharu | [rustup](https://rustup.rs/), C/C++ 빌드 도구, pkg-config, libclang, fontconfig, 한국어 시스템 폰트, 호환 NVIDIA 드라이버 |
+| MangaTranslator | uv가 관리하는 Python 3.13, CUDA 13.0 호환 PyTorch, 다운로드·빌드에 필요한 도구 |
+| 다운로드 | GitHub·Python 패키지 저장소·모델 저장소에 연결 가능한 네트워크와 충분한 저장 공간 |
+| 번역 | LLM 제공자 계정/API 키 또는 별도로 실행 중인 OpenAI 호환 LLM 서버 |
+
+Ubuntu의 시스템 의존성 예시입니다. 설치기는 `sudo`나 GPU 드라이버 설치를 자동 실행하지 않습니다.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git curl build-essential pkg-config libclang-dev libfontconfig1-dev fonts-noto-cjk
+```
+
+uv와 rustup은 위 공식 설치 문서를 따라 준비하세요. 설치기는 **엔진 설치 전에 GPU의 가용 VRAM을 검사**하며, NVIDIA GB10처럼 VRAM 수치가 제공되지 않는 통합메모리 장치는 가용 시스템 RAM으로 판단합니다. 수치 확인에 실패하거나 필요한 여유가 부족하면 웹 앱만 설치하는 `--engine none` 외에는 진행하지 않습니다. 이 검사는 현재 가용량에 대한 설치 전 최소 조건으로, 나중의 모델 추론 성능이나 로컬 LLM 동시 실행 가능성을 보장하지 않습니다. 모델 가중치는 설치 시 다운로드하지 않으며 앱의 **모델 준비** 화면에서 사용자가 명시적으로 선택합니다. CUDA/Torch 런타임과 엔진 의존성은 엔진 설치 단계에 다운로드될 수 있습니다.
+
+설치 전 최소 **가용량** 기준: 전용 VRAM은 Koharu 8 GiB / MangaTranslator 또는 둘 다 16 GiB, 확인된 GB10·GH200 통합메모리는 Koharu 16 GiB / MangaTranslator 또는 둘 다 24 GiB입니다. 각 엔진은 별도 작업 프로세스로 순차 실행되므로 두 엔진의 사용량을 합산하지 않습니다. 여러 전용 GPU의 여유 VRAM은 합산하지 않고 한 GPU가 기준을 충족해야 합니다. 통합 GPU에서는 `nvidia-smi`가 VRAM 수치를 제공하지 않으므로 `/proc/meminfo`의 `MemAvailable`을 확인합니다. 이 값은 모델별 최대 요구량이 아니라 **기본 구성 설치를 시도하기 위한 보수적인 문턱값**입니다. 동시 LLM, FLUX 9B 같은 추가 옵션과 이후 메모리 사용 변화는 별도로 고려해야 합니다.
+
+## 빠른 설치
+
+### 1. 소스 받기
+
+```bash
+git clone https://github.com/furyheimdall/comic-translator.git
+cd comic-translator
+```
+
+또는 소스 패키지를 압축 해제한 디렉터리에서 같은 명령을 실행합니다. 설치 후에도 이 소스 디렉터리가 서비스 실행 경로이므로 임의로 이동하거나 삭제하지 마세요.
+
+### 2. 설치 및 환경 구성
+
+```bash
+python3 scripts/install.py --engine koharu
+```
+
+기본값은 `127.0.0.1:8710`이며, 같은 컴퓨터에서만 접속할 수 있습니다. 설치기는 잠금 파일에 맞춰 앱 환경을 구성하고, 선택한 엔진을 설치한 뒤 환경 파일·실행기·systemd 사용자 유닛을 생성합니다. **기본적으로 서비스를 시작하거나 자동 시작을 활성화하지 않습니다.**
+
+기본 저장 위치:
+
+| 내용 | 위치 |
+|---|---|
+| 앱 가상환경 | 소스 디렉터리의 `.venv/` |
+| DB·원고·번역 결과·작업 로그 | `~/.local/share/comic-translator/` |
+| 실제 환경 설정 | `~/.config/comic-translator/env` (0600) |
+| 수동 실행기 | `~/.config/comic-translator/run.py` |
+| systemd 사용자 유닛 | `~/.config/systemd/user/comic-translator.service` |
+
+설정·데이터 경로는 각 옵션으로 바꿀 수 있습니다. 모델 캐시는 앱에서 설정하며 기본 위치는 `~/.cache` 아래 엔진별 캐시입니다. 기존 서비스에서 `HF_HOME`을 따로 지정했다면 Hugging Face 캐시와 Koharu 패키지 캐시의 실제 경로가 서로 다를 수 있으며, 앱의 **모델 준비 → 실제 사용 위치**에 둘 다 표시됩니다. 위치를 변경해도 이전 캐시의 파일을 자동으로 옮기지 않습니다. 유닛 위치는 `XDG_CONFIG_HOME`도 따르며, 설치기가 출력하는 실제 경로를 확인하세요. 기존 환경 파일·실행기·유닛·소스 가상환경이 있거나 데이터 디렉터리가 비어 있지 않으면 덮어쓰지 않고 중단합니다. 현재 서빙 중인 디렉터리에 새 설치기를 실행하지 말고, 별도의 소스·데이터 디렉터리에서 검증하세요.
+
+### 3. 실행
+
+systemd로 실행:
+
+```bash
+systemctl --user start comic-translator
+systemctl --user status comic-translator --no-pager
+```
+
+자동 시작이 필요할 때만 활성화:
+
+```bash
+systemctl --user enable comic-translator
+# 로그인하지 않은 상태에서도 사용자 서비스를 유지하려면 별도로 설정합니다.
+loginctl enable-linger "$USER"
+```
+
+설치와 동시에 활성화·시작하려면 **신규 설치에 한해** `--enable --start`를 명시할 수 있습니다. linger 설정에는 시스템 정책에 따라 관리자 권한이 필요할 수 있습니다.
+
+systemd 없이 실행:
+
+```bash
+python3 scripts/install.py --engine koharu --no-systemd
+python3 "$HOME/.config/comic-translator/run.py"
+```
+
+위 두 설치 방식 중 하나를 선택하세요. 이미 설치한 경우 설치 명령을 반복하지 않고 생성된 실행기를 사용합니다. 수동 실행기는 환경 파일을 읽고 실제 앱 프로세스를 시작합니다. 환경 파일을 셸에서 `source`하지 마세요.
+
+기본 접속 주소: **<http://127.0.0.1:8710>**
+
+## 설치 파라미터
+
+전체 옵션은 `python3 scripts/install.py --help`로 확인합니다.
+
+| 옵션 | 용도 |
+|---|---|
+| `--host` | 바인딩 주소. 기본 `127.0.0.1`, LAN 공개 시 `0.0.0.0` |
+| `--port` | HTTP 포트. 기본 `8710` |
+| `--data-dir` | DB·원고·번역 결과·로그 보관 경로 |
+| `--config-dir` | 비밀 환경 파일과 실행기 보관 경로 |
+| `--service-name` | systemd 사용자 서비스 이름. 별도 인스턴스는 서로 다른 이름·포트·경로 사용 |
+| `--engine` | `koharu`(기본), `mangatranslator`, `both`, `none` |
+| `--python` | 웹 앱에 사용할 Python 3.12 이상 버전 또는 인터프리터 |
+| `--password-file` | 로그인 비밀번호를 읽을 파일. 명령 인자에 비밀번호 자체를 넣지 않음 |
+| `--non-interactive` | 질문 없이 설치. 필요한 인증은 파일 또는 설치기의 안전한 생성 방식 사용 |
+| `--no-systemd` | systemd 등록 없이 환경 파일·수동 실행기만 생성 |
+| `--enable` | 설치 후 사용자 서비스 자동 시작 활성화 |
+| `--start` | 설치 후 사용자 서비스 시작 |
+
+LAN용 대화형 설치 예시:
+
+```bash
+python3 scripts/install.py \
+  --engine koharu \
+  --host 0.0.0.0 \
+  --port 8710 \
+  --data-dir "$HOME/.local/share/comic-translator" \
+  --config-dir "$HOME/.config/comic-translator"
+```
+
+외부 바인딩에는 로그인 비밀번호가 필수입니다. 터미널의 숨김 입력 또는 `--password-file`을 사용하세요. 무인 설치에서 생성된 비밀번호는 설치기가 안내하는 비밀 환경 파일에서 확인하고, 공개 로그에 복사하지 마세요. 비밀번호 파일은 저장소 밖에 두고 접근 권한을 제한하세요. Hugging Face 토큰과 모델 캐시 위치는 설치 인자가 아니라 앱의 **모델 준비** 화면에서 설정합니다.
+
+`0.0.0.0`은 접속 주소가 아닙니다. 다른 기기에서는 서버의 실제 IP와 선택한 포트로 접속합니다. **HTTP 로그인은 통신을 암호화하지 않습니다. 인터넷에 직접 노출하지 말고 VPN 또는 적절하게 구성한 HTTPS 역방향 프록시를 사용하세요.**
+
+`--engine none`은 웹 앱만 설치하는 모드입니다. GPU 없이 설치·UI를 확인하거나 별도로 엔진을 준비할 때 사용하며, 이 상태만으로 번역이 가능한 것은 아닙니다. 기존 엔진 경로를 지정하려면 생성된 환경 파일에서 `.env.example`에 설명한 `CT_KOHARU_BIN`, `CT_MT_DIR`, `CT_MT_PYTHON`, `CT_FONT_DIR` 등을 설정한 뒤 서비스가 유휴 상태일 때 재시작합니다.
+
+## 모델 준비·LLM 연결·첫 번역
+
+1. 웹 UI에 접속하고, 비밀번호를 설정했다면 로그인합니다.
+2. **모델 준비**에서 현재 캐시 위치를 확인하고 필요하면 절대 경로로 변경·저장합니다. 경로를 바꿔도 기존 캐시는 자동 이동하지 않으며 이후 다운로드는 새 경로를 사용합니다.
+3. 승인 모델을 쓸 때만 Hugging Face 토큰을 비밀번호 입력란에 넣고 저장합니다. 저장한 토큰은 서버의 기존 환경 변수·토큰 파일보다 우선하며 다시 화면에 표시하지 않습니다. 저장한 토큰을 삭제하면 기존 서버 토큰으로 몰래 되돌아가지 않고 모델 준비에 토큰을 사용하지 않습니다. 모델 페이지에서 해당 계정의 접근 승인·약관 동의가 필요한 경우 미리 마치세요.
+4. 사용할 엔진·OCR·지우기 모델 프로필을 선택하고, 모델 저장소 목록과 다운로드 안내를 확인한 뒤 **명시적으로 다운로드를 시작**합니다. 진행·실패·준비 상태를 확인합니다. 모델을 일괄 무조건 다운로드하지 않습니다.
+5. **LLM 제공자**에서 제공자·모델·인증 정보를 설정하고 **연결 테스트**로 실제 API 응답을 확인합니다.
+6. **새 번역**에서 준비한 엔진·옵션과 LLM 제공자를 선택합니다. 권한을 가진 원고 한두 장을 처리하고 결과 이미지를 직접 검토한 뒤 필요한 파일만 다운로드합니다.
+
+모델 가중치 다운로드는 번역 LLM 다운로드와 다릅니다. 앱은 LLM 가중치를 설치하지 않습니다. **새 Koharu 작업은 선택한 기본·추가 모델 파일이 지정된 캐시에 없으면 업로드 내용을 작업으로 저장하지 않고 준비 화면을 안내**합니다. 이전부터 사용하던 작업·캐시는 보호합니다. MangaTranslator 준비 항목은 확인된 말풍선/말풍선 밖 감지 모델 **일부만** 포함합니다. MT의 OCR·FLUX·기타 동적 의존성은 첫 사용 시 추가 다운로드될 수 있으며, 완료 표시가 전체 MT 엔진의 오프라인 준비나 GPU 추론 성공을 뜻하지 않습니다.
+
+| 제공자 | 인증·주의사항 |
+|---|---|
+| 로컬 OpenAI 호환 | 서버 주소·모델명·필요 시 API 키. LLM 서버 자체는 이 설치기가 설치하지 않음 |
+| OpenAI | API 키 또는 ChatGPT OAuth. ChatGPT OAuth는 비공식 경로여서 서비스 변경으로 중단될 수 있음 |
+| xAI | API 키 또는 SuperGrok OAuth. 계정 권한·서비스 정책에 따라 사용 제한 가능 |
+| Anthropic | API 키 |
+| Gemini | API 키, OpenAI 호환 엔드포인트 사용 |
+
+API 키와 OAuth 토큰은 데이터 디렉터리의 `secret.key`로 암호화되어 DB에 저장됩니다. **키 파일도 함께 유출되면 암호화된 인증 정보를 보호할 수 없으므로 데이터 디렉터리 전체를 비공개로 유지해야 합니다.** LLM 요청은 앱 내부 프록시를 통해 지정한 제공자로 전송됩니다. 선택한 OCR·비전·외부 LLM 설정에 따라 원고의 텍스트나 이미지가 외부 서비스에 전달될 수 있습니다.
+
+MangaTranslator의 말풍선 밖 텍스트 감지 모델은 Hugging Face의 별도 접근 승인이 필요할 수 있습니다. 토큰은 모델 준비 화면에 입력하고, 승인이 필요한 모델의 이용 조건은 Hugging Face 페이지에서 직접 확인하세요.
+
+## 운영·업데이트·백업
+
+```bash
+systemctl --user status comic-translator --no-pager
+journalctl --user -u comic-translator -f
+systemctl --user stop comic-translator
+systemctl --user start comic-translator
+```
+
+- 서비스 이름을 바꿨다면 위 명령에도 같은 이름을 사용합니다.
+- 업데이트나 재시작 전 진행 중·대기 중 작업을 확인하세요. 실행 중 작업을 강제로 끊으면 중단된 작업은 실패로 표시됩니다.
+- 백업은 서비스를 멈춘 뒤 **데이터 디렉터리 전체와 비밀 설정 디렉터리**를 안전한 별도 위치에 복사합니다. DB만 복사하거나 `secret.key`를 빠뜨리면 인증 정보·원고·결과를 온전히 복구할 수 없습니다.
+- 앱 업데이트는 백업 후 해당 소스 디렉터리에서 `uv sync --locked --no-dev`로 의존성을 맞춥니다. 변경된 엔진은 서비스를 멈춘 상태에서 대응하는 `scripts/setup_*.sh`로 다시 준비합니다. 신규 설치기를 덮어쓰기 도구로 사용하지 않습니다.
+- `setup_koharu.sh`는 지정된 원본 버전에 `engines/koharu/quality.patch`를 멱등 적용합니다. 소스와 패치가 맞지 않으면 개선 없이 빌드하지 않고 중단합니다.
+- DGX Spark용 Koharu 설치 경로는 CUDA 드라이버 하한을 13.3에서 13.0으로 조정합니다. 다른 하드웨어의 호환성을 보장하는 설정은 아닙니다.
+- `전체 다시 실행`은 확인 후 기존 결과를 지웁니다. 결과 보존이 필요하면 새 작업을 만들거나 `실패·미완료 N쪽만 재시도`를 사용하세요.
+- 부분 재시도에서 제공자를 바꾸면 완료 페이지는 유지되므로 한 작업 안에서도 번역 스타일이 달라질 수 있습니다.
+
+## 소스 패키지 만들기와 GitHub 준비
+
+```bash
+python3 scripts/package_release.py --check-only
+python3 scripts/package_release.py
+```
+
+결과는 기본적으로 `dist/comic-translator-0.1.0.tar.gz`입니다. 버전은 `pyproject.toml`을 따르며 `--output-dir`로 저장 위치를 변경할 수 있습니다. 압축 파일은 소스만 포함하므로 대상 머신에서 설치기와 모델 다운로드를 실행해야 합니다.
+
+커밋 전에는 검토한 소스만 선별해서 스테이징하고, 다음 검사를 통과시킵니다.
+
+```bash
+python3 scripts/package_release.py --check-staged
+git diff --cached --stat
+```
+
+`git add .`나 운영 디렉터리의 통째 압축 대신 명시적인 소스 선택을 사용하세요. 원격 저장소 주소를 설정하거나 로컬 커밋을 만드는 것과 GitHub로 `push`하는 것은 별도 작업입니다. 패키징 스크립트는 원격 저장소에 업로드하거나 push하지 않습니다.
+
+## 개발 검증
+
+운영 환경이 아닌 별도 소스 디렉터리에서 실행하세요.
+
+```bash
+uv sync --locked
+uv run --locked python -m pytest -q
+python3 scripts/package_release.py --check-only
+python3 scripts/package_release.py
+```
+
+GitHub Actions는 앱·설치·패키징 검사를 수행합니다. GPU 번역, 모델 접근 승인, 유료 API 연결이 검증됐다는 의미는 아닙니다. 엔진 변경은 지원 환경에서 실제 원고를 끝까지 처리하고 생성 이미지를 확인해야 합니다. 저작권 없는 합성 원고는 `tests/fixtures/make_sample_pages.py`로 별도 임시 디렉터리에 생성할 수 있습니다.
+
+## 라이선스
+
+자체 코드는 [Apache-2.0](LICENSE)입니다. 외부 엔진·모델·폰트·API에는 별도 조건이 적용됩니다. [외부 구성요소 고지](THIRD_PARTY_NOTICES.md)를 확인하세요. 번역할 원고에 대한 권한은 사용자가 확보해야 합니다.
