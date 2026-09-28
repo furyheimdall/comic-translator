@@ -572,7 +572,9 @@ async function renderModelSetup(version, focusEngine) {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const token = tokenInput.value.trim();
-    const json = { cache_dir: cacheInput.value.trim() };
+    const json = {};
+    const cacheDir = cacheInput.value.trim();
+    if (cacheDir !== setup.cache_dir) json.cache_dir = cacheDir;
     if (token) json.token = token;
     saveSetup(json, token ? "저장했습니다. 토큰은 암호화해 보관했고 다시 표시하지 않습니다." : "저장했습니다.");
   });
