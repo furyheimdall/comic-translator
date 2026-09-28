@@ -20,9 +20,10 @@ from pathlib import Path
 # Minimum viability for the default pipelines, not a guarantee for alternate
 # models or simultaneous local LLM inference. MT's default FLUX.2 Klein 4B
 # alone needs ~8 GiB bf16 weights plus encoders, OCR and inference activations.
-# Koharu defaults to RF-DETR, PaddleOCR-VL 1.6 and LaMa.
+# Koharu defaults to RF-DETR, PaddleOCR-VL 1.6 and LaMa. A completed GB10
+# job coincided with ~10 GiB of available-RAM swing; leave room to attempt it.
 DEDICATED_MIN_GIB = {"koharu": 8, "mangatranslator": 16, "both": 16}
-UNIFIED_MIN_GIB = {"koharu": 16, "mangatranslator": 24, "both": 24}
+UNIFIED_MIN_GIB = {"koharu": 12, "mangatranslator": 24, "both": 24}
 UNIFIED_GPU_RE = re.compile(r"\b(?:GB10|GH200)\b", re.IGNORECASE)
 GIB = 1024 ** 3
 

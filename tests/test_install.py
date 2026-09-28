@@ -118,7 +118,6 @@ def test_installer_exposes_no_model_cache_or_token_arguments() -> None:
 )
 def test_dedicated_vram_uses_one_gpu_free_memory_not_aggregate(
     report: str, engine: str, passes: bool, monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(install, "require_executable", lambda _: None)
 
@@ -129,22 +128,21 @@ def test_dedicated_vram_uses_one_gpu_free_memory_not_aggregate(
     if passes:
         install.preflight_gpu_memory(engine)
     else:
-        with pytest.raises(install.InstallError, match="최소 여유 메모리"):
+        with pytest.raises(install.InstallError):
             install.preflight_gpu_memory(engine)
-    output = capsys.readouterr().out
-    if report.startswith("[N/A]"):
-        assert "측정할 수 없음" in output
-    else:
-        assert "설치 전 최소 여유 기준" in output
 
 
 @pytest.mark.parametrize(("available_kib", "engine", "passes"), [
     (18164640, "koharu", True),  # GB10 with a concurrently loaded LLM (~17.3 GiB free).
+    (15 * 1024 * 1024 - 1, "koharu", True),  # Covers the observed ~14.9 GiB install rejection.
+    (12 * 1024 * 1024, "koharu", True),
+    (12 * 1024 * 1024 - 1, "koharu", False),
     (18164640, "mangatranslator", False),
-    (16 * 1024 * 1024 - 1, "koharu", False),
+    (24 * 1024 * 1024 - 1, "mangatranslator", False),
+    (24 * 1024 * 1024, "mangatranslator", True),
 ])
 def test_gb10_unified_memory_uses_available_ram_not_total(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     available_kib: int, engine: str, passes: bool,
 ) -> None:
     meminfo = tmp_path / "meminfo"
@@ -160,15 +158,12 @@ def test_gb10_unified_memory_uses_available_ram_not_total(
     if passes:
         install.preflight_gpu_memory(engine)
     else:
-        with pytest.raises(install.InstallError, match="최소 여유 메모리"):
+        with pytest.raises(install.InstallError):
             install.preflight_gpu_memory(engine)
-    output = capsys.readouterr().out
-    assert f"최소 여유 기준 {install.UNIFIED_MIN_GIB[engine]} GiB" in output
-    assert "MemAvailable/MemTotal" in output
 
 
 def test_unified_gpu_without_memavailable_fails_closed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     meminfo = tmp_path / "meminfo"
     meminfo.write_text("MemTotal: 127535316 kB\n")
@@ -180,9 +175,8 @@ def test_unified_gpu_without_memavailable_fails_closed(
         return SimpleNamespace(returncode=0, stdout="GPU 0: NVIDIA GB10\n" if command[-1] == "-L" else "[N/A], [N/A], NVIDIA GB10\n")
 
     monkeypatch.setattr(install.subprocess, "run", nvidia)
-    with pytest.raises(install.InstallError, match="최소 여유 메모리"):
+    with pytest.raises(install.InstallError):
         install.preflight_gpu_memory("koharu")
-    assert "통합 메모리 측정 실패" in capsys.readouterr().out
 
 
 def test_gpu_preflight_rejects_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:

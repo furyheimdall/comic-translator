@@ -51,7 +51,7 @@ sudo apt-get install -y git curl build-essential pkg-config libclang-dev libfont
 
 uv와 rustup은 위 공식 설치 문서를 따라 준비하세요. 설치기는 **엔진 설치 전에 GPU의 가용 VRAM을 검사**하며, NVIDIA GB10처럼 VRAM 수치가 제공되지 않는 통합메모리 장치는 가용 시스템 RAM으로 판단합니다. 수치 확인에 실패하거나 필요한 여유가 부족하면 웹 앱만 설치하는 `--engine none` 외에는 진행하지 않습니다. 이 검사는 현재 가용량에 대한 설치 전 최소 조건으로, 나중의 모델 추론 성능이나 로컬 LLM 동시 실행 가능성을 보장하지 않습니다. 모델 가중치는 설치 시 다운로드하지 않으며 앱의 **모델 준비** 화면에서 사용자가 명시적으로 선택합니다. CUDA/Torch 런타임과 엔진 의존성은 엔진 설치 단계에 다운로드될 수 있습니다.
 
-설치 전 최소 **가용량** 기준: 전용 VRAM은 Koharu 8 GiB / MangaTranslator 또는 둘 다 16 GiB, 확인된 GB10·GH200 통합메모리는 Koharu 16 GiB / MangaTranslator 또는 둘 다 24 GiB입니다. 각 엔진은 별도 작업 프로세스로 순차 실행되므로 두 엔진의 사용량을 합산하지 않습니다. 여러 전용 GPU의 여유 VRAM은 합산하지 않고 한 GPU가 기준을 충족해야 합니다. 통합 GPU에서는 `nvidia-smi`가 VRAM 수치를 제공하지 않으므로 `/proc/meminfo`의 `MemAvailable`을 확인합니다. 이 값은 모델별 최대 요구량이 아니라 **기본 구성 설치를 시도하기 위한 보수적인 문턱값**입니다. 동시 LLM, FLUX 9B 같은 추가 옵션과 이후 메모리 사용 변화는 별도로 고려해야 합니다.
+설치 전 최소 **가용량** 기준: 전용 VRAM은 Koharu 8 GiB / MangaTranslator 또는 둘 다 16 GiB, 확인된 GB10·GH200 통합메모리는 Koharu 12 GiB / MangaTranslator 또는 둘 다 24 GiB입니다. 각 엔진은 별도 작업 프로세스로 순차 실행되므로 두 엔진의 사용량을 합산하지 않습니다. 여러 전용 GPU의 여유 VRAM은 합산하지 않고 한 GPU가 기준을 충족해야 합니다. 통합 GPU에서는 `nvidia-smi`가 VRAM 수치를 제공하지 않으므로 `/proc/meminfo`의 `MemAvailable`을 확인합니다. 이 값은 모델별 최대 요구량이 아니라 **기본 구성 설치를 시도하기 위한 보수적인 문턱값**입니다. 동시 LLM, FLUX 9B 같은 추가 옵션과 이후 메모리 사용 변화는 별도로 고려해야 합니다.
 
 ## 빠른 설치
 
