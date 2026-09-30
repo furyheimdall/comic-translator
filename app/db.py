@@ -65,6 +65,7 @@ MIGRATIONS = (
     ("jobs", "live", "INTEGER NOT NULL DEFAULT 0"),
     ("pages", "sha256", "TEXT"),
     ("pages", "error", "TEXT"),
+    ("jobs", "llm", "TEXT NOT NULL DEFAULT '{}'"),
 )
 
 JOB_STATUSES = ("queued", "running", "done", "failed", "cancelled")
@@ -156,9 +157,9 @@ class Database:
             self._conn.execute("BEGIN")
             try:
                 self._conn.execute(
-                    """INSERT INTO jobs (id, title, engine, provider_id, options, instructions, status, message, live, created_at)
-                       VALUES (:id, :title, :engine, :provider_id, :options, :instructions, :status, :message, :live, :created_at)""",
-                    {"status": "queued", "message": "", "live": 0, **job, "options": json.dumps(job["options"])},
+                    """INSERT INTO jobs (id, title, engine, provider_id, options, instructions, status, message, live, llm, created_at)
+                       VALUES (:id, :title, :engine, :provider_id, :options, :instructions, :status, :message, :live, :llm, :created_at)""",
+                    {"status": "queued", "message": "", "live": 0, **job, "options": json.dumps(job["options"]), "llm": json.dumps(job.get("llm") or {}, sort_keys=True)},
                 )
                 self._conn.executemany(
                     "INSERT INTO pages (job_id, idx, source_name, file, sha256) VALUES (:job_id, :idx, :source_name, :file, :sha256)",
@@ -179,11 +180,11 @@ class Database:
         # Live (browser extension) sessions wait on a reader, so they go first.
         return self._one("SELECT * FROM jobs WHERE status = 'queued' ORDER BY live DESC, created_at LIMIT 1")
 
-    def find_live_job(self, engine: str, provider_id: str, options: str, instructions: str, since: float) -> dict[str, Any] | None:
+    def find_live_job(self, engine: str, provider_id: str, options: str, instructions: str, llm: str, since: float) -> dict[str, Any] | None:
         return self._one(
             """SELECT * FROM jobs WHERE live = 1 AND engine = ? AND provider_id = ? AND options = ? AND instructions = ?
-               AND created_at >= ? ORDER BY created_at DESC LIMIT 1""",
-            (engine, provider_id, options, instructions, since),
+               AND llm = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1""",
+            (engine, provider_id, options, instructions, llm, since),
         )
 
     def update_job(self, job_id: str, **fields: Any) -> None:
@@ -243,9 +244,12 @@ class Database:
         assert row is not None
         return int(row["idx"])
 
-    def find_translated_page(self, sha256: str) -> dict[str, Any] | None:
+    def find_translated_page(self, sha256: str, provider_id: str, llm: str) -> dict[str, Any] | None:
         return self._one(
-            "SELECT * FROM pages WHERE sha256 = ? AND output IS NOT NULL ORDER BY rowid DESC LIMIT 1", (sha256,)
+            """SELECT pages.* FROM pages JOIN jobs ON jobs.id = pages.job_id
+               WHERE pages.sha256 = ? AND pages.output IS NOT NULL AND jobs.provider_id = ? AND jobs.llm = ?
+               ORDER BY pages.rowid DESC LIMIT 1""",
+            (sha256, provider_id, llm),
         )
 
     def set_page_error(self, job_id: str, idx: int, error: str | None) -> None:

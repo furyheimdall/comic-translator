@@ -24,7 +24,10 @@ from .engines import build_engines
 from .jobs import IngestError, JobManager, collect_images
 from .model_setup import ModelSetup
 from .prompting import build_instructions
-from .providers import KINDS, PRESETS, ChatRequest, ProviderConfig, ProviderError, chat, completion_envelope
+from .providers import (
+    KINDS, PRESETS, REASONING_LABELS, ChatRequest, ProviderConfig, ProviderError, chat, completion_envelope,
+    list_models, reasoning_levels, with_overrides,
+)
 from .secretbox import SecretBox, read_or_create_token
 from .settings import ROOT, Settings, load_settings
 
@@ -212,6 +215,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def list_providers() -> list[dict[str, Any]]:
         return [provider_public(row) for row in db.list_providers()]
 
+    model_lists: dict[str, tuple[float, list[str], str | None]] = {}
+
+    async def provider_models(row: dict[str, Any]) -> tuple[list[str], str | None]:
+        """Models the provider reports (cached 10 min); falls back to the configured model."""
+        key = f"{row['id']}:{row['model']}:{row['base_url']}"
+        cached = model_lists.get(key)
+        if cached and cached[0] > time.time():
+            return cached[1], cached[2]
+        try:
+            models, error = await list_models(provider_config(row)), None
+        except (ProviderError, httpx.HTTPError, ValueError) as exc:
+            models, error = [row["model"]], f"모델 목록을 가져오지 못해 설정된 모델만 표시합니다: {exc}"
+        model_lists[key] = (time.time() + 600, models, error)
+        return models, error
+
+    @app.get("/api/providers/{provider_id}/options")
+    async def provider_options(provider_id: str) -> dict[str, Any]:
+        row = require_provider(provider_id)
+        models, error = await provider_models(row)
+        return {
+            "models": models,
+            "default_model": row["model"],
+            "models_error": error,
+            "reasoning_levels": [
+                {"value": level, "label": REASONING_LABELS[level]} for level in reasoning_levels(provider_config(row))
+            ],
+        }
+
     @app.post("/api/providers")
     async def save_provider(payload: dict[str, Any]) -> dict[str, Any]:
         kind = payload.get("kind")
@@ -317,6 +348,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data = {
             **{key: job[key] for key in ("id", "title", "engine", "provider_id", "status", "progress", "message", "error", "created_at", "started_at", "finished_at", "instructions")},
             "live": bool(job["live"]),
+            "llm": json.loads(job["llm"] or "{}"),
             "options": json.loads(job["options"]),
             "page_count": len(pages),
             "translated_count": sum(1 for page in pages if page["output"]),
@@ -458,11 +490,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def open_live(payload: dict[str, Any]) -> dict[str, Any]:
         provider_id = str(payload.get("provider_id", ""))
         engine = str(payload.get("engine", "koharu"))
-        if not provider_public(require_provider(provider_id))["connected"]:
+        row = require_provider(provider_id)
+        if not provider_public(row)["connected"]:
             raise HTTPException(400, "선택한 LLM 제공자를 먼저 연결하세요.")
         options = payload.get("options") or {}
         if not isinstance(options, dict):
             raise HTTPException(400, "options 는 객체여야 합니다.")
+        # Model and reasoning level may only be chosen from what the server offers for this provider.
+        llm: dict[str, str] = {}
+        model = str(payload.get("model") or row["model"])
+        if model != row["model"]:
+            models, _error = await provider_models(row)
+            if model not in models:
+                raise HTTPException(400, f"{row['name']}에서 제공하지 않는 모델입니다: {model}")
+            llm["model"] = model
+        reasoning = str(payload.get("reasoning") or "default")
+        if reasoning not in reasoning_levels(provider_config(row)):
+            raise HTTPException(400, f"{row['name']}에서 지원하지 않는 추론 수준입니다: {reasoning}")
+        if reasoning != "default":
+            llm["reasoning"] = reasoning
         try:
             if engine == "koharu":
                 try:
@@ -476,6 +522,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 options=options,
                 instructions=str(payload.get("instructions", "")),
                 title=str(payload.get("title", "")).strip()[:200] or time.strftime("웹 실시간 번역 %Y-%m-%d"),
+                llm=llm,
             )
         except (IngestError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -554,8 +601,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return _proxy_error("upstream request timed out", 504)
             try:
                 async with asyncio.timeout(remaining):
+                    config = provider_config(row)
+                    llm_choice = json.loads(job["llm"] or "{}")
+                    if llm_choice:
+                        config = with_overrides(config, llm_choice.get("model"), llm_choice.get("reasoning"))
                     text = await chat(
-                        provider_config(row),
+                        config,
                         request,
                         lambda tokens: save_oauth(row["id"], tokens, row["account"]),
                     )

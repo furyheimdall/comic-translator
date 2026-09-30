@@ -11,7 +11,7 @@ import json
 import re
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -201,6 +201,11 @@ async def _anthropic(client: httpx.AsyncClient, config: ProviderConfig, request:
     if request.temperature is not None:
         body["temperature"] = request.temperature
     body.update(config.extra_body)
+    thinking = body.get("thinking") or {}
+    if thinking.get("type") == "enabled":
+        # Extended thinking rejects a custom temperature and needs room above its budget.
+        body.pop("temperature", None)
+        body["max_tokens"] = max(body["max_tokens"], int(thinking.get("budget_tokens", 0)) + 4096)
     response = await client.post(
         f"{config.base_url or ANTHROPIC_API}/messages",
         headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
@@ -356,6 +361,90 @@ async def chat(config: ProviderConfig, request: ChatRequest, save_secret: Secret
                 config.extra_body,
             )
     raise ProviderError(f"알 수 없는 제공자 종류: {config.kind}", 400)
+
+
+# --------------------------------------------------------------------------- per-session model / reasoning
+
+REASONING_LABELS = {"default": "제공자 기본값", "off": "끔", "low": "낮음", "medium": "보통", "high": "높음"}
+ANTHROPIC_THINKING_BUDGET = {"low": 1024, "medium": 4096, "high": 12000}
+
+
+def _deepseek_style(config: ProviderConfig) -> bool:
+    kwargs = config.extra_body.get("chat_template_kwargs")
+    return isinstance(kwargs, dict) and "thinking" in kwargs
+
+
+def reasoning_levels(config: ProviderConfig) -> list[str]:
+    """Reasoning levels this provider's wire format can express; "default" keeps its own settings."""
+    if config.kind == "openai_compatible":
+        return ["default", "off", "low", "medium", "high"] if _deepseek_style(config) else ["default", "low", "medium", "high"]
+    if config.kind in ("openai", "anthropic"):
+        return ["default", "off", "low", "medium", "high"]
+    if config.kind == "gemini":
+        return ["default", "low", "medium", "high"]
+    # xAI picks reasoning by model (e.g. *-reasoning / *-non-reasoning), not by a parameter.
+    return ["default"]
+
+
+def with_overrides(config: ProviderConfig, model: str | None, reasoning: str | None) -> ProviderConfig:
+    """Provider config with a session's model and reasoning level applied."""
+    extra = json.loads(json.dumps(config.extra_body))
+    level = reasoning or "default"
+    if level not in reasoning_levels(config):
+        raise ProviderError(f"{config.name}에서 지원하지 않는 추론 수준입니다: {level}", 400)
+    if level != "default":
+        if config.kind == "openai_compatible" and _deepseek_style(config):
+            kwargs = extra["chat_template_kwargs"]
+            kwargs["thinking"] = level != "off"
+            if level == "off":
+                kwargs.pop("reasoning_effort", None)
+            else:
+                kwargs["reasoning_effort"] = level
+        elif config.kind == "openai" and config.auth == "oauth":
+            extra["reasoning"] = {**(extra.get("reasoning") or {}), "effort": "none" if level == "off" else level}
+        elif config.kind == "anthropic":
+            extra.pop("thinking", None)
+            if level != "off":
+                extra["thinking"] = {"type": "enabled", "budget_tokens": ANTHROPIC_THINKING_BUDGET[level]}
+        else:
+            # OpenAI chat completions and the OpenAI-compatible endpoints of other servers/Gemini.
+            extra["reasoning_effort"] = "none" if level == "off" else level
+    return replace(config, model=model or config.model, extra_body=extra)
+
+
+NON_CHAT_MODEL = re.compile(r"embed|tts|whisper|dall-e|audio|realtime|transcri|moderation|image|search|computer-use|sora", re.I)
+
+
+async def list_models(config: ProviderConfig) -> list[str]:
+    """Chat model ids the provider reports; the configured model always comes first."""
+    secret = config.secret or {}
+    found: list[str] = []
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+        if config.kind == "anthropic":
+            response = await client.get(
+                f"{config.base_url or ANTHROPIC_API}/models",
+                headers={"x-api-key": secret.get("api_key", ""), "anthropic-version": "2023-06-01"},
+                params={"limit": 100},
+            )
+        elif config.auth == "oauth":
+            # ChatGPT/SuperGrok subscriptions expose no model list; keep the configured model.
+            return [config.model]
+        else:
+            base = {
+                "openai_compatible": config.base_url or "",
+                "openai": config.base_url or OPENAI_API,
+                "xai": config.base_url or XAI_API,
+                "gemini": config.base_url or GEMINI_OPENAI_API,
+            }[config.kind]
+            headers = {"Authorization": f"Bearer {secret['api_key']}"} if secret.get("api_key") else {}
+            response = await client.get(f"{base.rstrip('/')}/models", headers=headers)
+        if response.status_code >= 400:
+            raise ProviderError(f"모델 목록 HTTP {response.status_code}: {response.text[:300]}", response.status_code)
+        for item in response.json().get("data") or []:
+            model_id = str(item.get("id", "")).removeprefix("models/")
+            if model_id and not NON_CHAT_MODEL.search(model_id):
+                found.append(model_id)
+    return [config.model, *sorted(set(found) - {config.model})]
 
 
 def _bearer(api_key: str | None, label: str) -> dict[str, str]:

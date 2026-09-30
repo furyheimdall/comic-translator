@@ -70,6 +70,40 @@ def test_same_settings_reuse_one_session_and_other_settings_do_not(live):
     db, _engine, manager, job_id = live
     assert manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="x") == job_id
     assert manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="용어", title="x") != job_id
+    fast = {"model": "fast", "reasoning": "off"}
+    fast_id = manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="x", llm=fast)
+    assert fast_id != job_id
+    assert manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="x", llm=dict(reversed(fast.items()))) == fast_id
+
+
+def test_cached_translation_is_not_reused_across_model_choices(live):
+    db, _engine, manager, job_id = live
+    manager.add_live_page(job_id, "a", image_bytes("red"))
+    manager._run(db.get_job(job_id))
+    other = manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="x", llm={"reasoning": "off"})
+    assert manager.add_live_page(other, "a", image_bytes("red"))["translated"] is False
+    assert manager.add_live_page(job_id, "a", image_bytes("red"))["translated"] is True
+
+
+def test_new_work_for_another_session_asks_the_idle_engine_to_exit(live):
+    db, engine, manager, job_id = live
+    other = manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="x", llm={"reasoning": "off"})
+    manager.add_live_page(job_id, "a", image_bytes("red"))
+    markers = []
+
+    def queue_other(_name):
+        watched = manager._live[0]
+        manager.add_live_page(job_id, "same session", image_bytes("blue"))
+        markers.append((watched / ".closed").exists())
+        manager.add_live_page(other, "other session", image_bytes("green"))
+        markers.append((watched / ".closed").exists())
+
+    engine.during_page = lambda name: markers or queue_other(name)
+    manager._run(db.get_job(job_id))
+    assert markers == [False, True]
+    # Pages already queued for the watched session still finish before it exits.
+    assert all(page["output"] for page in pages(db, job_id).values())
+    assert db.get_job(other)["status"] == "queued"
 
 
 def test_page_added_while_engine_watches_is_translated_in_the_same_run(live):

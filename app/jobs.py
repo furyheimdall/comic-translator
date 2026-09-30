@@ -234,12 +234,20 @@ class JobManager:
             },
             pages,
         )
+        with self._lock:
+            self._release_idle_live()
         self._wake.set()
         return job_id
 
     # live sessions (browser extension) -------------------------------------------
-    def open_live(self, *, engine_id: str, provider_id: str, options: dict[str, Any], instructions: str, title: str) -> str:
-        """Reuse today's live session for the same settings, so the engine stays warm across tabs."""
+    def open_live(
+        self, *, engine_id: str, provider_id: str, options: dict[str, Any], instructions: str, title: str,
+        llm: dict[str, str] | None = None,
+    ) -> str:
+        """Reuse today's live session for the same settings, so the engine stays warm across tabs.
+
+        `llm` holds the session's model / reasoning-level choice ({} = provider defaults).
+        """
         engine = self.engines.get(engine_id)
         if not engine:
             raise IngestError(f"알 수 없는 엔진: {engine_id}")
@@ -251,7 +259,9 @@ class JobManager:
         resolved = engine.resolve_options(options)
         today = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
         with self._lock:
-            existing = self.db.find_live_job(engine_id, provider_id, json.dumps(resolved), instructions, today)
+            existing = self.db.find_live_job(
+                engine_id, provider_id, json.dumps(resolved), instructions, json.dumps(llm or {}, sort_keys=True), today
+            )
             if existing:
                 return existing["id"]
             job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
@@ -267,6 +277,7 @@ class JobManager:
                     "status": "done",
                     "message": "페이지 대기 중",
                     "live": 1,
+                    "llm": llm or {},
                     "created_at": time.time(),
                 },
                 [],
@@ -289,7 +300,8 @@ class JobManager:
             file = f"{idx:04d}{suffix}"
             (self.job_dir(job_id) / "input" / file).write_bytes(data)
             output = None
-            cached = self.db.find_translated_page(digest)
+            # Reuse only translations made with the same provider and model/reasoning choice.
+            cached = self.db.find_translated_page(digest, job["provider_id"], job["llm"])
             source = self.output_path(cached["job_id"], cached) if cached else None
             if source and source.exists():
                 output_dir = self.job_dir(job_id) / "output"
@@ -304,10 +316,21 @@ class JobManager:
                     # the page is listed at start or requeued by _finish_live.
                     if self._live:
                         (self._live[0] / file).symlink_to(self.input_path(job_id, page).resolve())
-                elif job["status"] != "queued":
-                    self.db.set_job_status(job_id, "queued", message="대기 중", error=None)
-                    self._wake.set()
+                else:
+                    # Another session's engine may be idling in watch mode; let it exit now.
+                    self._release_idle_live()
+                    if job["status"] != "queued":
+                        self.db.set_job_status(job_id, "queued", message="대기 중", error=None)
+                        self._wake.set()
         return {"idx": idx, "translated": output is not None, "error": None}
+
+    def _release_idle_live(self) -> None:
+        """Ask the watching engine to exit once its pending pages are done (caller holds the lock).
+
+        ct_batch only checks the marker when it has nothing left, so queued pages still finish.
+        """
+        if self._live:
+            (self._live[0] / ".closed").touch()
 
     def discard_live_pages(self, job_id: str, indices: set[int]) -> None:
         """Drop pages nobody waits for any more, unless the engine already started them."""
@@ -355,11 +378,14 @@ class JobManager:
         for page in self.db.list_pages(job_id):
             if not page["output"] and page["error"]:
                 self.db.set_page_error(job_id, page["idx"], None)
+        switched = provider_id is not None and provider_id != job["provider_id"]
         self.db.update_job(
             job_id, status="queued", progress=done / max(total, 1),
             message=f"완료 {done}쪽 보존 · {total - done}쪽 재시도 대기",
             error=None, started_at=None, finished_at=None,
             provider_id=provider_id if provider_id is not None else job["provider_id"],
+            # A model/reasoning choice belongs to the old provider.
+            llm="{}" if switched else job["llm"],
         )
         self._wake.set()
 

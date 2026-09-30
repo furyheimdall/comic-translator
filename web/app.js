@@ -393,7 +393,10 @@ async function renderJob(jobId, version) {
     badge.className = `badge ${job.status}`;
     badge.textContent = STATUS[job.status];
     const provider = state.providers.find((item) => item.id === job.provider_id);
-    providerLabel.textContent = provider ? `${provider.name} (${provider.model})` : "제공자 삭제됨";
+    const REASONING = { off: "끔", low: "낮음", medium: "보통", high: "높음" };
+    const model = job.llm?.model || provider?.model;
+    const reasoning = job.llm?.reasoning ? ` · 추론 ${REASONING[job.llm.reasoning] || job.llm.reasoning}` : "";
+    providerLabel.textContent = provider ? `${provider.name} (${model}${reasoning})` : "제공자 삭제됨";
     retrySettings.hidden = active;
     retry.disabled = retryFailed.disabled = !providerSelect.value;
     count.textContent = `${job.translated_count}/${job.page_count}쪽`;
