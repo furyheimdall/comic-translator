@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import secrets
@@ -53,7 +54,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     model_setup = ModelSetup(db, box, settings, engines)
     for instance in engines.values():
         instance.model_environment = model_setup.environment
-    jobs = JobManager(db, settings.jobs_dir, engines, lambda: (settings.llm_base_url, proxy_token))
+    jobs = JobManager(
+        db, settings.jobs_dir, engines, lambda: (settings.llm_base_url, proxy_token),
+        live_idle_seconds=settings.live_idle_seconds,
+    )
     sessions: dict[str, float] = {}
 
     async def save_oauth(provider_id: str, tokens: dict[str, Any], account: str | None) -> None:
@@ -73,6 +77,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def authenticated(request: Request) -> bool:
         if not settings.password:
             return True
+        header = request.headers.get("authorization", "")
+        if header.startswith("Bearer "):
+            # Extension API token; only its hash is stored.
+            return db.use_api_token(hashlib.sha256(header[7:].strip().encode("utf-8")).hexdigest())
         token = request.cookies.get(SESSION_COOKIE)
         expires = sessions.get(token or "")
         return bool(expires and expires > time.time())
@@ -105,6 +113,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = JSONResponse({"ok": True})
         response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_TTL, httponly=True, samesite="strict")
         return response
+
+    # ------------------------------------------------------------------ extension API tokens
+    def require_web_session(request: Request) -> None:
+        # An extension token must not be able to mint or revoke tokens.
+        if request.headers.get("authorization"):
+            raise HTTPException(403, "토큰 관리는 웹 화면에서만 할 수 있습니다.")
+
+    @app.get("/api/tokens")
+    async def list_tokens(request: Request) -> list[dict[str, Any]]:
+        require_web_session(request)
+        return db.list_api_tokens()
+
+    @app.post("/api/tokens")
+    async def create_token(request: Request, payload: dict[str, str]) -> dict[str, Any]:
+        require_web_session(request)
+        name = str(payload.get("name", "")).strip()[:100] or "브라우저 확장"
+        token = "ct_" + secrets.token_urlsafe(32)
+        token_id = uuid.uuid4().hex[:12]
+        db.create_api_token(token_id, name, hashlib.sha256(token.encode("utf-8")).hexdigest())
+        # The plain token is returned once and never stored.
+        return {"id": token_id, "name": name, "token": token}
+
+    @app.delete("/api/tokens/{token_id}")
+    async def delete_token(request: Request, token_id: str) -> dict[str, bool]:
+        require_web_session(request)
+        db.delete_api_token(token_id)
+        return {"ok": True}
 
     # ------------------------------------------------------------------ meta
     @app.get("/api/meta")
@@ -281,15 +316,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pages = db.list_pages(job["id"])
         data = {
             **{key: job[key] for key in ("id", "title", "engine", "provider_id", "status", "progress", "message", "error", "created_at", "started_at", "finished_at", "instructions")},
+            "live": bool(job["live"]),
             "options": json.loads(job["options"]),
             "page_count": len(pages),
             "translated_count": sum(1 for page in pages if page["output"]),
         }
         if with_pages:
-            data["pages"] = [
-                {"idx": page["idx"], "source_name": page["source_name"], "translated": bool(page["output"])} for page in pages
-            ]
+            data["pages"] = [page_public(page) for page in pages]
         return data
+
+    def page_public(page: dict[str, Any]) -> dict[str, Any]:
+        return {"idx": page["idx"], "source_name": page["source_name"], "translated": bool(page["output"]), "error": page["error"]}
 
     def require_job(job_id: str) -> dict[str, Any]:
         job = db.get_job(job_id)
@@ -409,6 +446,71 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return PlainTextResponse("")
         data = path.read_bytes()[-200_000:]
         return PlainTextResponse(data.decode("utf-8", errors="replace"))
+
+    # ------------------------------------------------------------------ live sessions (browser extension)
+    def require_live(job_id: str) -> dict[str, Any]:
+        job = db.get_job(job_id)
+        if not job or not job["live"]:
+            raise HTTPException(404, "실시간 번역 세션을 찾을 수 없습니다.")
+        return job
+
+    @app.post("/api/live")
+    async def open_live(payload: dict[str, Any]) -> dict[str, Any]:
+        provider_id = str(payload.get("provider_id", ""))
+        engine = str(payload.get("engine", "koharu"))
+        if not provider_public(require_provider(provider_id))["connected"]:
+            raise HTTPException(400, "선택한 LLM 제공자를 먼저 연결하세요.")
+        options = payload.get("options") or {}
+        if not isinstance(options, dict):
+            raise HTTPException(400, "options 는 객체여야 합니다.")
+        try:
+            if engine == "koharu":
+                try:
+                    model_setup.require_prepared_for_new_job(engines[engine].resolve_options(options))
+                except RuntimeError as exc:
+                    raise HTTPException(409, str(exc)) from exc
+            job_id = await asyncio.to_thread(
+                jobs.open_live,
+                engine_id=engine,
+                provider_id=provider_id,
+                options=options,
+                instructions=str(payload.get("instructions", "")),
+                title=str(payload.get("title", "")).strip()[:200] or time.strftime("웹 실시간 번역 %Y-%m-%d"),
+            )
+        except (IngestError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {**job_public(require_live(job_id)), "pages": []}
+
+    @app.get("/api/live/{job_id}")
+    async def get_live(job_id: str, pages: str = "") -> dict[str, Any]:
+        job = require_live(job_id)
+        try:
+            wanted = {int(part) for part in pages.split(",") if part.strip()}
+        except ValueError as exc:
+            raise HTTPException(400, "pages 는 쉼표로 구분한 번호여야 합니다.") from exc
+        rows = [page_public(page) for page in db.list_pages(job_id) if page["idx"] in wanted]
+        return {**job_public(job), "pages": rows}
+
+    @app.post("/api/live/{job_id}/pages")
+    async def add_live_page(job_id: str, file: UploadFile = File(...), source_name: str = Form("")) -> dict[str, Any]:
+        require_live(job_id)
+        data = await file.read()
+        try:
+            return await asyncio.to_thread(jobs.add_live_page, job_id, source_name or file.filename or "image", data)
+        except KeyError as exc:
+            raise HTTPException(404, "실시간 번역 세션을 찾을 수 없습니다.") from exc
+        except IngestError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/live/{job_id}/discard")
+    async def discard_live_pages(job_id: str, payload: dict[str, Any]) -> dict[str, bool]:
+        require_live(job_id)
+        try:
+            indices = {int(idx) for idx in payload.get("pages") or []}
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "pages 는 번호 목록이어야 합니다.") from exc
+        await asyncio.to_thread(jobs.discard_live_pages, job_id, indices)
+        return {"ok": True}
 
     # ------------------------------------------------------------------ LLM proxy (engines only)
     @app.get("/llm/v1/models")

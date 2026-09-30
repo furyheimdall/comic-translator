@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -154,14 +155,18 @@ class JobManager:
         jobs_dir: Path,
         engines: dict[str, Engine],
         llm_endpoint: Callable[[], tuple[str, str]],
+        live_idle_seconds: int = 180,
     ) -> None:
         self.db = db
         self.jobs_dir = jobs_dir
         self.engines = engines
         self._llm_endpoint = llm_endpoint
+        self.live_idle_seconds = live_idle_seconds
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._current: tuple[str, Engine] | None = None
+        # Input folder and run of the live session the engine is watching now.
+        self._live: tuple[Path, EngineRun] | None = None
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._loop, name="job-worker", daemon=True)
 
@@ -232,6 +237,91 @@ class JobManager:
         self._wake.set()
         return job_id
 
+    # live sessions (browser extension) -------------------------------------------
+    def open_live(self, *, engine_id: str, provider_id: str, options: dict[str, Any], instructions: str, title: str) -> str:
+        """Reuse today's live session for the same settings, so the engine stays warm across tabs."""
+        engine = self.engines.get(engine_id)
+        if not engine:
+            raise IngestError(f"알 수 없는 엔진: {engine_id}")
+        if not engine.supports_live:
+            raise IngestError(f"{engine.name} 엔진은 실시간 번역을 지원하지 않습니다.")
+        available, reason = engine.availability()
+        if not available:
+            raise IngestError(f"{engine.name} 엔진을 사용할 수 없습니다: {reason}")
+        resolved = engine.resolve_options(options)
+        today = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+        with self._lock:
+            existing = self.db.find_live_job(engine_id, provider_id, json.dumps(resolved), instructions, today)
+            if existing:
+                return existing["id"]
+            job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
+            (self.job_dir(job_id) / "input").mkdir(parents=True)
+            self.db.create_job(
+                {
+                    "id": job_id,
+                    "title": title,
+                    "engine": engine_id,
+                    "provider_id": provider_id,
+                    "options": resolved,
+                    "instructions": instructions,
+                    "status": "done",
+                    "message": "페이지 대기 중",
+                    "live": 1,
+                    "created_at": time.time(),
+                },
+                [],
+            )
+        return job_id
+
+    def add_live_page(self, job_id: str, name: str, data: bytes) -> dict[str, Any]:
+        """Append one page; reuse an earlier translation of identical bytes, else feed the engine."""
+        _checked_image(name, data)
+        try:
+            suffix = image_suffix(data)
+        except Exception as exc:
+            raise IngestError(f"이미지를 읽을 수 없습니다: {name}") from exc
+        digest = hashlib.sha256(data).hexdigest()
+        with self._lock:
+            job = self.db.get_job(job_id)
+            if not job or not job["live"]:
+                raise KeyError(job_id)
+            idx = self.db.next_page_idx(job_id)
+            file = f"{idx:04d}{suffix}"
+            (self.job_dir(job_id) / "input" / file).write_bytes(data)
+            output = None
+            cached = self.db.find_translated_page(digest)
+            source = self.output_path(cached["job_id"], cached) if cached else None
+            if source and source.exists():
+                output_dir = self.job_dir(job_id) / "output"
+                output_dir.mkdir(exist_ok=True)
+                output = f"{idx:04d}{source.suffix}"
+                shutil.copyfile(source, output_dir / output)
+            page = {"job_id": job_id, "idx": idx, "source_name": name[:500], "file": file, "sha256": digest, "output": output}
+            self.db.add_page(page)
+            if output is None:
+                if self._current and self._current[0] == job_id:
+                    # Running: link into the watched folder. Outside that window
+                    # the page is listed at start or requeued by _finish_live.
+                    if self._live:
+                        (self._live[0] / file).symlink_to(self.input_path(job_id, page).resolve())
+                elif job["status"] != "queued":
+                    self.db.set_job_status(job_id, "queued", message="대기 중", error=None)
+                    self._wake.set()
+        return {"idx": idx, "translated": output is not None, "error": None}
+
+    def discard_live_pages(self, job_id: str, indices: set[int]) -> None:
+        """Drop pages nobody waits for any more, unless the engine already started them."""
+        with self._lock:
+            live = self._live if self._current and self._current[0] == job_id else None
+            for page in self.db.list_pages(job_id):
+                if page["idx"] not in indices or page["output"] or page["error"]:
+                    continue
+                if live:
+                    if page["file"] in live[1].started_files:
+                        continue
+                    (live[0] / page["file"]).unlink(missing_ok=True)
+                self.db.set_page_error(job_id, page["idx"], "취소됨")
+
     def cancel(self, job_id: str) -> None:
         job = self.db.get_job(job_id)
         if not job:
@@ -262,6 +352,9 @@ class JobManager:
             done = 0
             total = len(self.db.list_pages(job_id))
         (self.job_dir(job_id) / "translated.cbz").unlink(missing_ok=True)
+        for page in self.db.list_pages(job_id):
+            if not page["output"] and page["error"]:
+                self.db.set_page_error(job_id, page["idx"], None)
         self.db.update_job(
             job_id, status="queued", progress=done / max(total, 1),
             message=f"완료 {done}쪽 보존 · {total - done}쪽 재시도 대기",
@@ -308,6 +401,7 @@ class JobManager:
 
     def _run(self, job: dict[str, Any]) -> None:
         job_id = job["id"]
+        live = bool(job["live"])
         engine = self.engines[job["engine"]]
         with self._lock:
             self._current = (job_id, engine)
@@ -317,14 +411,11 @@ class JobManager:
         run: EngineRun | None = None
         try:
             done = self._collect_outputs(job_id, output_dir)
-            pages = self.db.list_pages(job_id)
-            pending = [page for page in pages if not page["output"]]
             # Both engines keep input stems in their output names. Only expose
             # missing pages, so retries cannot overwrite successful results.
             with tempfile.TemporaryDirectory(prefix="pending-", dir=self.job_dir(job_id)) as directory:
                 input_dir = Path(directory)
-                for page in pending:
-                    (input_dir / page["file"]).symlink_to(self.input_path(job_id, page).resolve())
+                pages = self.db.list_pages(job_id)
                 run = EngineRun(
                     job_id=job_id,
                     input_dir=input_dir,
@@ -337,12 +428,29 @@ class JobManager:
                     options=engine.resolve_options(json.loads(job["options"])),
                     report=lambda progress, message: self._report(
                         job_id, output_dir,
-                        (done + progress * len(pending)) / max(len(pages), 1), message,
+                        None if live else (done + progress * len(pending)) / max(len(pages), 1), message,
                     ),
+                    watch_idle_seconds=self.live_idle_seconds if live else None,
                 )
-                if pending:
-                    engine.run(run)
+                # Under the lock, so a live page added concurrently is either
+                # listed here or linked into input_dir by add_live_page.
+                with self._lock:
+                    pages = self.db.list_pages(job_id)
+                    pending = [page for page in pages if not page["output"] and not (live and page["error"])]
+                    for page in pending:
+                        (input_dir / page["file"]).symlink_to(self.input_path(job_id, page).resolve())
+                    if live:
+                        self._live = (input_dir, run)
+                try:
+                    if pending:
+                        engine.run(run)
+                finally:
+                    with self._lock:
+                        self._live = None
             done = self._collect_outputs(job_id, output_dir)
+            if live:
+                self._finish_live(job_id, run)
+                return
             total = len(self.db.list_pages(job_id))
             if done < total:
                 detail = "; ".join(run.page_errors[:3])
@@ -350,12 +458,16 @@ class JobManager:
             self.db.set_job_status(job_id, "done", progress=1.0, message=f"{done}쪽 완료")
         except EngineCancelled:
             self._collect_outputs(job_id, output_dir)
+            if live:
+                self._fail_unfinished(job_id, "취소됨")
             self.db.set_job_status(job_id, "cancelled", message="취소됨")
         except Exception as exc:
             done = self._collect_outputs(job_id, output_dir)
             total = len(self.db.list_pages(job_id))
             with open(self.log_path(job_id), "a", encoding="utf-8") as log:
                 log.write(traceback.format_exc())
+            if live:
+                self._fail_unfinished(job_id, str(exc))
             self.db.set_job_status(
                 job_id, "failed", error=str(exc),
                 message=f"{done}/{total}쪽 완료 · 실패·미완료 페이지를 재시도할 수 있습니다.",
@@ -364,11 +476,41 @@ class JobManager:
             with self._lock:
                 self._current = None
 
-    def _report(self, job_id: str, output_dir: Path, progress: float, message: str) -> None:
+    def _finish_live(self, job_id: str, run: EngineRun) -> None:
+        """After the engine went idle: record page errors, requeue pages it never saw."""
+        unseen = 0
+        with self._lock:
+            for page in self.db.list_pages(job_id):
+                if page["output"] or page["error"]:
+                    continue
+                if page["file"] in run.failed_files:
+                    self.db.set_page_error(job_id, page["idx"], run.failed_files[page["file"]][:500] or "번역 실패")
+                elif page["file"] in run.started_files:
+                    self.db.set_page_error(job_id, page["idx"], "엔진이 결과 이미지를 만들지 못했습니다.")
+                else:
+                    # Linked after the engine's last scan of its input folder.
+                    unseen += 1
+            pages = self.db.list_pages(job_id)
+            translated = sum(1 for page in pages if page["output"])
+            if unseen:
+                self.db.set_job_status(job_id, "queued", message=f"대기 중 · {unseen}쪽")
+                self._wake.set()
+            else:
+                self.db.set_job_status(job_id, "done", progress=1.0, message=f"대기 중 · {translated}/{len(pages)}쪽 완료")
+
+    def _fail_unfinished(self, job_id: str, error: str) -> None:
+        for page in self.db.list_pages(job_id):
+            if not page["output"] and not page["error"]:
+                self.db.set_page_error(job_id, page["idx"], error[:500])
+
+    def _report(self, job_id: str, output_dir: Path, progress: float | None, message: str) -> None:
         # Engines write pages as they finish; reflect them so the UI shows
         # translated pages during long jobs instead of only at the end.
         self._collect_outputs(job_id, output_dir)
-        self.db.update_job(job_id, progress=max(0.0, min(1.0, progress)), message=message[:500])
+        if progress is None:
+            self.db.update_job(job_id, message=message[:500])
+        else:
+            self.db.update_job(job_id, progress=max(0.0, min(1.0, progress)), message=message[:500])
 
     def _collect_outputs(self, job_id: str, output_dir: Path) -> int:
         """Map engine outputs (`0001.png` or `0001_translated.png`) back to pages."""

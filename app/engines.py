@@ -35,6 +35,10 @@ class EngineRun:
     options: dict[str, Any]
     report: Callable[[float, str], None]
     page_errors: list[str] = field(default_factory=list)
+    failed_files: dict[str, str] = field(default_factory=dict)
+    started_files: set[str] = field(default_factory=set)
+    # Live sessions keep the engine resident and feed pages into input_dir.
+    watch_idle_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,7 @@ class Engine:
     name: str
     description: str
     options: tuple[EngineOption, ...]
+    supports_live = False
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -108,6 +113,7 @@ class Engine:
             "description": self.description,
             "available": available,
             "reason": reason,
+            "live": self.supports_live,
             "options": [option.public() for option in self.options],
         }
 
@@ -155,8 +161,12 @@ class Engine:
         except json.JSONDecodeError:
             return
         if "page_error" in event:
-            run.page_errors.append(f"{event['page_error']}: {event.get('message', '')}")
+            name = str(event["page_error"])
+            run.page_errors.append(f"{name}: {event.get('message', '')}")
+            run.failed_files[name] = str(event.get("message", ""))
             return
+        if "page" in event:
+            run.started_files.add(str(event["page"]))
         run.report(float(event.get("progress", 0.0)), str(event.get("message", "")))
 
 
@@ -272,6 +282,7 @@ class MangaTranslatorEngine(Engine):
 class KoharuEngine(Engine):
     id = "koharu"
     name = "Koharu"
+    supports_live = True
     description = "Rust · RF-DETR 레이아웃 + Comic Text Detector 글자 검출 + PaddleOCR-VL/manga-ocr + LaMa/FLUX.2 Klein + Vello 식자"
     options = (
         EngineOption(
@@ -313,6 +324,8 @@ class KoharuEngine(Engine):
             argv += ["--instructions", run.instructions]
         if opts["vision"]:
             argv.append("--vision")
+        if run.watch_idle_seconds is not None:
+            argv += ["--watch", "--idle-timeout", str(run.watch_idle_seconds)]
         return argv, {"CT_LLM_API_KEY": run.llm_api_key, **self.model_environment(self.id)}, run.output_dir
 
 

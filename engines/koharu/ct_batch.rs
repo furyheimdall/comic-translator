@@ -5,14 +5,18 @@
 //! (sorted by file name), translates through an OpenAI-compatible endpoint, and
 //! writes rendered PNGs with the same stem to `--output-dir`.
 //!
+//! With `--watch`, the loaded pipeline stays resident and keeps picking up new
+//! images that appear in `--input-dir` until the `.closed` marker exists or no
+//! new image arrives for `--idle-timeout` seconds.
+//!
 //! Progress is printed to stdout as `@@CT@@{json}` lines.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result, bail};
@@ -61,6 +65,12 @@ struct Arguments {
     /// Font families in priority order.
     #[arg(long = "font-family", default_values_t = vec!["Noto Sans CJK KR".to_owned()])]
     font_families: Vec<String>,
+    /// Keep the pipeline loaded and process images added to the input folder later.
+    #[arg(long)]
+    watch: bool,
+    /// In watch mode, exit after this many seconds without a new image.
+    #[arg(long, default_value_t = 120)]
+    idle_timeout: u64,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -169,7 +179,7 @@ fn list_images(dir: &Path) -> Result<Vec<PathBuf>> {
 async fn main() -> Result<()> {
     let arguments = Arguments::parse();
     let images = list_images(&arguments.input_dir)?;
-    if images.is_empty() {
+    if images.is_empty() && !arguments.watch {
         bail!("no images in {}", arguments.input_dir.display());
     }
     fs::create_dir_all(&arguments.output_dir)?;
@@ -198,24 +208,54 @@ async fn main() -> Result<()> {
     }))?;
     let rasterizer = Rasterizer::new()?;
 
-    let total = images.len();
+    let mut seen = HashSet::new();
+    let mut processed = 0usize;
     let mut failures = 0usize;
-    for (index, path) in images.iter().enumerate() {
+    let mut idle_since = Instant::now();
+    loop {
+        let pending: Vec<PathBuf> = list_images(&arguments.input_dir)?
+            .into_iter()
+            .filter(|path| !seen.contains(path))
+            .collect();
+        let Some(path) = pending.first().cloned() else {
+            if !arguments.watch
+                || arguments.input_dir.join(".closed").exists()
+                || idle_since.elapsed() >= Duration::from_secs(arguments.idle_timeout)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            continue;
+        };
+        seen.insert(path.clone());
+        let total = processed + pending.len();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("page").to_owned();
-        emit(index as f64 / total as f64, format!("페이지 {}/{} 처리 중: {name}", index + 1, total));
+        println!(
+            "@@CT@@{}",
+            json!({
+                "progress": processed as f64 / total as f64,
+                "message": format!("페이지 {}/{} 처리 중: {name}", processed + 1, total),
+                "page": name,
+            })
+        );
         let started = Instant::now();
-        match process_page(&arguments, &pipeline, &renderer, &rasterizer, path, index, total).await {
-            Ok(()) => eprintln!("{name} done in {:.1}s", started.elapsed().as_secs_f64()),
+        match process_page(&arguments, &pipeline, &renderer, &rasterizer, &path, processed, total).await {
+            Ok(()) => {
+                eprintln!("{name} done in {:.1}s", started.elapsed().as_secs_f64());
+                emit((processed + 1) as f64 / total as f64, format!("{name} 완료"));
+            }
             Err(error) => {
                 failures += 1;
                 eprintln!("{name} failed: {error:#}");
                 println!("@@CT@@{}", json!({ "page_error": name, "message": format!("{error:#}") }));
             }
         }
+        processed += 1;
+        idle_since = Instant::now();
     }
     emit(1.0, "완료");
-    if failures > 0 {
-        bail!("{failures}/{total} pages failed");
+    if failures > 0 && !arguments.watch {
+        bail!("{failures}/{processed} pages failed");
     }
     Ok(())
 }

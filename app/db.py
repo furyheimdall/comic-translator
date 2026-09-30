@@ -51,7 +51,21 @@ CREATE TABLE IF NOT EXISTS model_setup (
     cache_dir TEXT,
     token BLOB
 );
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at REAL NOT NULL,
+    last_used_at REAL
+);
 """
+
+# Columns added after the first release; applied to existing databases on open.
+MIGRATIONS = (
+    ("jobs", "live", "INTEGER NOT NULL DEFAULT 0"),
+    ("pages", "sha256", "TEXT"),
+    ("pages", "error", "TEXT"),
+)
 
 JOB_STATUSES = ("queued", "running", "done", "failed", "cancelled")
 
@@ -64,6 +78,11 @@ class Database:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        for table, column, definition in MIGRATIONS:
+            columns = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+            if column not in columns:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS pages_sha256 ON pages (sha256) WHERE output IS NOT NULL")
         self._lock = threading.Lock()
 
     def _exec(self, sql: str, params: tuple | dict = ()) -> sqlite3.Cursor:
@@ -113,6 +132,23 @@ class Database:
 
     def delete_provider(self, provider_id: str) -> None:
         self._exec("DELETE FROM providers WHERE id = ?", (provider_id,))
+    # extension API tokens (only SHA-256 hashes are stored) ---------------------
+    def list_api_tokens(self) -> list[dict[str, Any]]:
+        return self._all("SELECT id, name, created_at, last_used_at FROM api_tokens ORDER BY created_at")
+
+    def create_api_token(self, token_id: str, name: str, token_hash: str) -> None:
+        self._exec(
+            "INSERT INTO api_tokens (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)",
+            (token_id, name, token_hash, time.time()),
+        )
+
+    def use_api_token(self, token_hash: str) -> bool:
+        return self._exec(
+            "UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?", (time.time(), token_hash)
+        ).rowcount > 0
+
+    def delete_api_token(self, token_id: str) -> None:
+        self._exec("DELETE FROM api_tokens WHERE id = ?", (token_id,))
 
     # jobs ------------------------------------------------------------------
     def create_job(self, job: dict[str, Any], pages: list[dict[str, Any]]) -> None:
@@ -120,13 +156,13 @@ class Database:
             self._conn.execute("BEGIN")
             try:
                 self._conn.execute(
-                    """INSERT INTO jobs (id, title, engine, provider_id, options, instructions, status, created_at)
-                       VALUES (:id, :title, :engine, :provider_id, :options, :instructions, 'queued', :created_at)""",
-                    {**job, "options": json.dumps(job["options"])},
+                    """INSERT INTO jobs (id, title, engine, provider_id, options, instructions, status, message, live, created_at)
+                       VALUES (:id, :title, :engine, :provider_id, :options, :instructions, :status, :message, :live, :created_at)""",
+                    {"status": "queued", "message": "", "live": 0, **job, "options": json.dumps(job["options"])},
                 )
                 self._conn.executemany(
-                    "INSERT INTO pages (job_id, idx, source_name, file) VALUES (:job_id, :idx, :source_name, :file)",
-                    pages,
+                    "INSERT INTO pages (job_id, idx, source_name, file, sha256) VALUES (:job_id, :idx, :source_name, :file, :sha256)",
+                    [{"sha256": None, **page} for page in pages],
                 )
                 self._conn.execute("COMMIT")
             except BaseException:
@@ -140,7 +176,15 @@ class Database:
         return self._one("SELECT * FROM jobs WHERE id = ?", (job_id,))
 
     def next_queued_job(self) -> dict[str, Any] | None:
-        return self._one("SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1")
+        # Live (browser extension) sessions wait on a reader, so they go first.
+        return self._one("SELECT * FROM jobs WHERE status = 'queued' ORDER BY live DESC, created_at LIMIT 1")
+
+    def find_live_job(self, engine: str, provider_id: str, options: str, instructions: str, since: float) -> dict[str, Any] | None:
+        return self._one(
+            """SELECT * FROM jobs WHERE live = 1 AND engine = ? AND provider_id = ? AND options = ? AND instructions = ?
+               AND created_at >= ? ORDER BY created_at DESC LIMIT 1""",
+            (engine, provider_id, options, instructions, since),
+        )
 
     def update_job(self, job_id: str, **fields: Any) -> None:
         if not fields:
@@ -158,11 +202,25 @@ class Database:
         self.update_job(job_id, status=status, **fields)
 
     def reset_interrupted_jobs(self) -> None:
-        """Jobs left running by a previous process are failed, not silently resumed."""
-        self._exec(
-            "UPDATE jobs SET status='failed', error='서버가 재시작되어 작업이 중단되었습니다.', finished_at=? WHERE status='running'",
-            (time.time(),),
-        )
+        """Jobs left running by a previous process are failed, not silently resumed.
+
+        Live sessions have a reader waiting per page, so their unfinished pages
+        get an explicit error instead of hanging until the next upload.
+        """
+        with self._lock:
+            self._conn.execute(
+                """UPDATE pages SET error = '서버가 재시작되어 번역이 중단되었습니다.'
+                   WHERE output IS NULL AND error IS NULL
+                   AND job_id IN (SELECT id FROM jobs WHERE live = 1 AND status IN ('queued', 'running'))"""
+            )
+            self._conn.execute(
+                "UPDATE jobs SET status='done', message='서버 재시작', finished_at=? WHERE live = 1 AND status = 'queued'",
+                (time.time(),),
+            )
+            self._conn.execute(
+                "UPDATE jobs SET status='failed', error='서버가 재시작되어 작업이 중단되었습니다.', finished_at=? WHERE status='running'",
+                (time.time(),),
+            )
 
     def delete_job(self, job_id: str) -> None:
         self._exec("DELETE FROM jobs WHERE id = ?", (job_id,))
@@ -172,3 +230,23 @@ class Database:
 
     def set_page_output(self, job_id: str, idx: int, output: str | None) -> None:
         self._exec("UPDATE pages SET output = ? WHERE job_id = ? AND idx = ?", (output, job_id, idx))
+
+    def add_page(self, page: dict[str, Any]) -> None:
+        self._exec(
+            """INSERT INTO pages (job_id, idx, source_name, file, sha256, output, error)
+               VALUES (:job_id, :idx, :source_name, :file, :sha256, :output, :error)""",
+            {"output": None, "error": None, **page},
+        )
+
+    def next_page_idx(self, job_id: str) -> int:
+        row = self._one("SELECT COALESCE(MAX(idx), 0) + 1 AS idx FROM pages WHERE job_id = ?", (job_id,))
+        assert row is not None
+        return int(row["idx"])
+
+    def find_translated_page(self, sha256: str) -> dict[str, Any] | None:
+        return self._one(
+            "SELECT * FROM pages WHERE sha256 = ? AND output IS NOT NULL ORDER BY rowid DESC LIMIT 1", (sha256,)
+        )
+
+    def set_page_error(self, job_id: str, idx: int, error: str | None) -> None:
+        self._exec("UPDATE pages SET error = ? WHERE job_id = ? AND idx = ?", (error, job_id, idx))

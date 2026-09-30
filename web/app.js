@@ -71,6 +71,7 @@ async function route() {
     if (section === "new") return await renderNewJob(version);
     if (section === "models") return await renderModelSetup(version, id ? decodeURIComponent(id) : null);
     if (section === "providers") return renderProviders();
+    if (section === "extension") return await renderExtension(version);
     if (section === "job" && id) return await renderJob(id, version);
     return await renderJobs(version);
   } catch (err) {
@@ -846,6 +847,61 @@ function renderProviders() {
       addForm,
     ),
     ...list,
+  );
+}
+
+// ------------------------------------------------------------------ browser extension tokens
+async function renderExtension(version) {
+  const tokens = await api("/api/tokens");
+  if (version !== state.routeVersion) return;
+  const created = h("div");
+  const nameInput = h("input", { name: "name", placeholder: "예: 거실 PC Chrome", maxlength: "100" });
+  const form = h(
+    "form",
+    {
+      class: "row",
+      onsubmit: async (e) => {
+        e.preventDefault();
+        try {
+          const token = await api("/api/tokens", { method: "POST", json: { name: nameInput.value } });
+          if (version !== state.routeVersion) return;
+          await renderExtension(version);
+          view.querySelector("[data-created]").replaceChildren(
+            h("p", {}, `새 토큰 “${token.name}”: 이 화면을 벗어나면 다시 볼 수 없으니 확장 프로그램 설정에 바로 붙여 넣으세요.`),
+            h("p", { class: "code" }, token.token),
+          );
+        } catch (err) {
+          toast(err.message, true);
+        }
+      },
+    },
+    nameInput,
+    h("button", { type: "submit" }, "토큰 만들기"),
+  );
+  created.setAttribute("data-created", "");
+  const rows = tokens.map((t) =>
+    h("li", { class: "row between" },
+      h("span", {}, t.name, h("span", { class: "muted" }, ` · 생성 ${fmtTime(t.created_at)} · 마지막 사용 ${t.last_used_at ? fmtTime(t.last_used_at) : "없음"}`)),
+      h("button", { class: "danger", onclick: async () => {
+        if (!confirm(`“${t.name}” 토큰을 폐기할까요? 이 토큰을 쓰는 확장 프로그램은 더 이상 접속할 수 없습니다.`)) return;
+        await api(`/api/tokens/${t.id}`, { method: "DELETE" });
+        route();
+      } }, "폐기"),
+    ),
+  );
+  view.replaceChildren(
+    h("section", { class: "card" },
+      h("h2", {}, "확장 프로그램"),
+      h("p", { class: "muted" },
+        "Chrome 확장 프로그램이 웹 페이지의 만화 이미지를 이 서버로 보내 실시간으로 번역합니다. 확장 프로그램 설정에 서버 주소와 아래에서 만든 토큰을 입력하세요. ",
+        "실시간 번역은 Koharu 엔진을 쓰며, 같은 설정의 요청은 하루 단위로 하나의 ‘웹 실시간 번역’ 작업에 모입니다. 새 페이지가 없으면 엔진은 잠시 뒤 GPU 메모리를 반환합니다."),
+      form,
+      created,
+    ),
+    h("section", { class: "card" },
+      h("h3", {}, "발급한 토큰"),
+      rows.length ? h("ul", { class: "plain" }, rows) : h("p", { class: "muted" }, "아직 없습니다."),
+    ),
   );
 }
 

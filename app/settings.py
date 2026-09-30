@@ -28,6 +28,8 @@ class Settings:
     koharu_font_family: str
     font_dir: Path
     hf_token_file: Path
+    # Seconds a live (extension) session keeps the engine loaded without new pages.
+    live_idle_seconds: int = 180
 
     @property
     def db_path(self) -> Path:
@@ -67,4 +69,5 @@ def load_settings() -> Settings:
             "CT_HF_TOKEN_FILE",
             Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface").expanduser() / "token",
         ),
+        live_idle_seconds=int(os.environ.get("CT_LIVE_IDLE_SECONDS", "180")),
     )
