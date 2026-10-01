@@ -175,7 +175,7 @@ MangaTranslator의 말풍선 밖 텍스트 감지 모델은 Hugging Face의 별�
 
 ## 브라우저 확장 실시간 번역
 
-별도 저장소의 Chrome 확장 프로그램(comic-translator-ext)이 웹 페이지에 로딩된 만화 이미지를 이 서버로 보내고, 번역된 이미지로 바꿔 표시합니다.
+별도 저장소의 Chrome 확장 프로그램 [comic-translator-extension](https://github.com/furyheimdall/comic-translator-extension)이 웹 페이지에 로딩된 만화 이미지를 이 서버로 보내고, 번역된 이미지로 바꿔 표시합니다. 설치 파일과 설치 방법은 그 저장소의 [Releases](https://github.com/furyheimdall/comic-translator-extension/releases)와 README에 있습니다. 서버 v0.4.0 이상에는 확장 1.1.0 이상이 필요합니다.
 
 1. 확장 프로그램 팝업에 서버 주소를 넣고 **페어링 요청**을 누릅니다. 팝업에 6자리 코드가 표시됩니다.
 2. 서버 웹 UI의 **확장 프로그램** 화면에 같은 코드의 **연결 요청**이 나타나면 코드를 대조한 뒤 **승인**합니다. 요청은 5분 뒤 만료되고, 동시에 대기할 수 있는 요청은 5개입니다.
