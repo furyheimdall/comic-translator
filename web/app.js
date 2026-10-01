@@ -853,59 +853,65 @@ function renderProviders() {
   );
 }
 
-// ------------------------------------------------------------------ browser extension tokens
+// ------------------------------------------------------------------ browser extension pairing
 async function renderExtension(version) {
-  const tokens = await api("/api/tokens");
+  stopPolling();
+  const [requests, devices] = await Promise.all([api("/api/pair/requests"), api("/api/devices")]);
   if (version !== state.routeVersion) return;
-  const created = h("div");
-  const nameInput = h("input", { name: "name", placeholder: "예: 거실 PC Chrome", maxlength: "100" });
-  const form = h(
-    "form",
-    {
-      class: "row",
-      onsubmit: async (e) => {
-        e.preventDefault();
-        try {
-          const token = await api("/api/tokens", { method: "POST", json: { name: nameInput.value } });
-          if (version !== state.routeVersion) return;
-          await renderExtension(version);
-          view.querySelector("[data-created]").replaceChildren(
-            h("p", {}, `새 토큰 “${token.name}”: 이 화면을 벗어나면 다시 볼 수 없으니 확장 프로그램 설정에 바로 붙여 넣으세요.`),
-            h("p", { class: "code" }, token.token),
-          );
-        } catch (err) {
-          toast(err.message, true);
-        }
-      },
-    },
-    nameInput,
-    h("button", { type: "submit" }, "토큰 만들기"),
-  );
-  created.setAttribute("data-created", "");
-  const rows = tokens.map((t) =>
+  const decide = async (request, action) => {
+    try {
+      await api(`/api/pair/requests/${request.id}/${action}`, { method: "POST" });
+      toast(action === "approve" ? `“${request.name}” 연결을 승인했습니다.` : "연결 요청을 거절했습니다.");
+    } catch (err) {
+      toast(err.message, true);
+    }
+    if (version === state.routeVersion) renderExtension(version);
+  };
+  const requestRows = requests.map((r) =>
     h("li", { class: "row between" },
-      h("span", {}, t.name, h("span", { class: "muted" }, ` · 생성 ${fmtTime(t.created_at)} · 마지막 사용 ${t.last_used_at ? fmtTime(t.last_used_at) : "없음"}`)),
+      h("span", {}, h("b", { class: "pair-code" }, `${r.code.slice(0, 3)} ${r.code.slice(3)}`), ` ${r.name}`,
+        h("span", { class: "muted" }, ` · ${Math.max(0, Math.round((r.expires_at - Date.now() / 1000) / 60))}분 뒤 만료`)),
+      h("span", { class: "row" },
+        h("button", { onclick: () => decide(r, "approve") }, "승인"),
+        h("button", { class: "secondary", onclick: () => decide(r, "deny") }, "거절")),
+    ),
+  );
+  const deviceRows = devices.map((d) =>
+    h("li", { class: "row between" },
+      h("span", {}, d.name, h("span", { class: "muted" }, ` · 연결 ${fmtTime(d.created_at)} · 마지막 사용 ${d.last_used_at ? fmtTime(d.last_used_at) : "없음"}`)),
       h("button", { class: "danger", onclick: async () => {
-        if (!confirm(`“${t.name}” 토큰을 폐기할까요? 이 토큰을 쓰는 확장 프로그램은 더 이상 접속할 수 없습니다.`)) return;
-        await api(`/api/tokens/${t.id}`, { method: "DELETE" });
+        if (!confirm(`“${d.name}” 연결을 해제할까요? 이 브라우저의 확장 프로그램은 다시 페어링해야 합니다.`)) return;
+        await api(`/api/devices/${d.id}`, { method: "DELETE" });
         route();
-      } }, "폐기"),
+      } }, "연결 해제"),
     ),
   );
   view.replaceChildren(
     h("section", { class: "card" },
       h("h2", {}, "확장 프로그램"),
       h("p", { class: "muted" },
-        "Chrome 확장 프로그램이 웹 페이지의 만화 이미지를 이 서버로 보내 실시간으로 번역합니다. 확장 프로그램 설정에 서버 주소와 아래에서 만든 토큰을 입력하세요. ",
-        "실시간 번역은 Koharu 엔진을 쓰며, 같은 설정의 요청은 하루 단위로 하나의 ‘웹 실시간 번역’ 작업에 모입니다. 새 페이지가 없으면 엔진은 잠시 뒤 GPU 메모리를 반환합니다."),
-      form,
-      created,
+        "Chrome 확장 프로그램이 웹 페이지의 만화 이미지를 이 서버로 보내 실시간으로 번역합니다. 확장 프로그램 팝업에 서버 주소를 넣고 ‘페어링 요청’을 누르면 아래에 요청이 나타납니다. ",
+        "확장 프로그램에 표시된 6자리 코드와 같은지 확인한 뒤 승인하세요. 연결된 기기는 확장 프로그램에 필요한 기능만 사용할 수 있습니다."),
     ),
     h("section", { class: "card" },
-      h("h3", {}, "발급한 토큰"),
-      rows.length ? h("ul", { class: "plain" }, rows) : h("p", { class: "muted" }, "아직 없습니다."),
+      h("h3", {}, "연결 요청"),
+      requestRows.length ? h("ul", { class: "plain" }, requestRows) : h("p", { class: "muted" }, "대기 중인 요청이 없습니다. 요청은 5분 뒤 만료됩니다."),
+    ),
+    h("section", { class: "card" },
+      h("h3", {}, "연결된 기기"),
+      deviceRows.length ? h("ul", { class: "plain" }, deviceRows) : h("p", { class: "muted" }, "아직 없습니다."),
     ),
   );
+  // New requests appear without reloading; stop when the user leaves this page.
+  const ids = JSON.stringify(requests.map((r) => r.id));
+  const poll = async () => {
+    if (version !== state.routeVersion) return;
+    const latest = await api("/api/pair/requests").catch(() => null);
+    if (version !== state.routeVersion) return;
+    if (latest && JSON.stringify(latest.map((r) => r.id)) !== ids) return renderExtension(version);
+    state.pollTimer = setTimeout(poll, 2000);
+  };
+  state.pollTimer = setTimeout(poll, 2000);
 }
 
 function providerCard(p) {

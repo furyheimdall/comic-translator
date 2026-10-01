@@ -86,6 +86,7 @@ pre.log { max-height: 360px; overflow: auto; background: #1f1d1a; color: #eee; p
 .card .code { font-family: ui-monospace, monospace; word-break: break-all; user-select: all; background: #f4f1ec; padding: 0.5rem; border-radius: 6px; }
 ul.plain { list-style: none; margin: 0; padding: 0; }
 ul.plain li { padding: 0.4rem 0; border-top: 1px solid var(--line); }
+.pair-code { font-family: ui-monospace, monospace; font-size: 1.15rem; letter-spacing: 0.08em; }
 .toast {
   position: fixed; right: 1rem; bottom: 1rem; background: var(--ink); color: #fff; padding: 0.7rem 1rem;
   border-radius: 8px; max-width: 420px; box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);

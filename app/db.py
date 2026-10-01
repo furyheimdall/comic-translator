@@ -133,23 +133,26 @@ class Database:
 
     def delete_provider(self, provider_id: str) -> None:
         self._exec("DELETE FROM providers WHERE id = ?", (provider_id,))
-    # extension API tokens (only SHA-256 hashes are stored) ---------------------
-    def list_api_tokens(self) -> list[dict[str, Any]]:
+
+    # paired extension devices (only SHA-256 hashes of their tokens are stored) --
+    def list_devices(self) -> list[dict[str, Any]]:
         return self._all("SELECT id, name, created_at, last_used_at FROM api_tokens ORDER BY created_at")
 
-    def create_api_token(self, token_id: str, name: str, token_hash: str) -> None:
+    def create_device(self, device_id: str, name: str, token_hash: str) -> None:
         self._exec(
             "INSERT INTO api_tokens (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)",
-            (token_id, name, token_hash, time.time()),
+            (device_id, name, token_hash, time.time()),
         )
 
-    def use_api_token(self, token_hash: str) -> bool:
-        return self._exec(
-            "UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?", (time.time(), token_hash)
-        ).rowcount > 0
+    def use_device_token(self, token_hash: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute("SELECT id, name FROM api_tokens WHERE token_hash = ?", (token_hash,)).fetchone()
+            if row:
+                self._conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", (time.time(), row["id"]))
+        return dict(row) if row else None
 
-    def delete_api_token(self, token_id: str) -> None:
-        self._exec("DELETE FROM api_tokens WHERE id = ?", (token_id,))
+    def delete_device(self, device_id: str) -> None:
+        self._exec("DELETE FROM api_tokens WHERE id = ?", (device_id,))
 
     # jobs ------------------------------------------------------------------
     def create_job(self, job: dict[str, Any], pages: list[dict[str, Any]]) -> None:

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 import uuid
@@ -28,11 +29,25 @@ from .providers import (
     KINDS, PRESETS, REASONING_LABELS, ChatRequest, ProviderConfig, ProviderError, chat, completion_envelope,
     list_models, reasoning_levels, with_overrides,
 )
+from .pairing import Pairing, PairingError
 from .secretbox import SecretBox, read_or_create_token
 from .settings import ROOT, Settings, load_settings
 
 SESSION_COOKIE = "ct_session"
 SESSION_TTL = 30 * 24 * 3600
+
+# Unauthenticated endpoints; pairing proves possession with its own secret.
+PUBLIC_ROUTES = {("POST", "/api/login"), ("GET", "/api/session"), ("POST", "/api/pair/start"), ("POST", "/api/pair/poll")}
+# Everything a paired browser extension may call.
+EXTENSION_ROUTES = (
+    ("GET", re.compile(r"/api/(session|meta|providers)")),
+    ("GET", re.compile(r"/api/providers/[^/]+/options")),
+    ("POST", re.compile(r"/api/live")),
+    ("GET", re.compile(r"/api/live/[^/]+")),
+    ("POST", re.compile(r"/api/live/[^/]+/(pages|discard)")),
+    ("POST", re.compile(r"/api/pair/unpair")),
+)
+LIVE_OUTPUT = re.compile(r"/api/jobs/([^/]+)/pages/\d+/output")
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -77,16 +92,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="comic-translator", lifespan=lifespan, docs_url=None, redoc_url=None)
 
     # ------------------------------------------------------------------ auth
-    def authenticated(request: Request) -> bool:
-        if not settings.password:
-            return True
-        header = request.headers.get("authorization", "")
-        if header.startswith("Bearer "):
-            # Extension API token; only its hash is stored.
-            return db.use_api_token(hashlib.sha256(header[7:].strip().encode("utf-8")).hexdigest())
+    def web_session(request: Request) -> bool:
         token = request.cookies.get(SESSION_COOKIE)
         expires = sessions.get(token or "")
         return bool(expires and expires > time.time())
+
+    def has_bearer(request: Request) -> bool:
+        return request.headers.get("authorization", "").startswith("Bearer ")
+
+    def authenticated(request: Request) -> bool:
+        if not settings.password:
+            return True
+        return request.state.device is not None if has_bearer(request) else web_session(request)
+
+    def extension_allowed(method: str, path: str) -> bool:
+        """Paired devices may only use what the extension needs."""
+        if any(method == allowed and pattern.fullmatch(path) for allowed, pattern in EXTENSION_ROUTES):
+            return True
+        match = LIVE_OUTPUT.fullmatch(path)
+        if method == "GET" and match:
+            job = db.get_job(match.group(1))
+            return bool(job and job["live"])
+        return False
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -95,13 +122,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             header = request.headers.get("authorization", "")
             if not hmac.compare_digest(header, f"Bearer {proxy_token}"):
                 return JSONResponse({"error": {"message": "invalid proxy token"}}, status_code=401)
-        elif path.startswith("/api/") and path not in ("/api/login", "/api/session") and not authenticated(request):
-            return JSONResponse({"detail": "로그인이 필요합니다."}, status_code=401)
+        elif path.startswith("/api/"):
+            request.state.device = None
+            if settings.password and has_bearer(request):
+                token = request.headers["authorization"][7:].strip()
+                request.state.device = db.use_device_token(hashlib.sha256(token.encode("utf-8")).hexdigest())
+            if (request.method, path) in PUBLIC_ROUTES or not settings.password:
+                pass
+            elif has_bearer(request):
+                if request.state.device is None:
+                    return JSONResponse({"detail": "확장 프로그램 연결이 해제되었습니다. 다시 페어링하세요."}, status_code=401)
+                if not extension_allowed(request.method, path):
+                    return JSONResponse({"detail": "확장 프로그램 연결로는 사용할 수 없는 기능입니다."}, status_code=403)
+            elif not web_session(request):
+                return JSONResponse({"detail": "로그인이 필요합니다."}, status_code=401)
         return await call_next(request)
 
     @app.get("/api/session")
     async def session(request: Request) -> dict[str, Any]:
-        return {"authenticated": authenticated(request), "password_required": bool(settings.password)}
+        device = request.state.device
+        return {
+            "authenticated": authenticated(request),
+            "password_required": bool(settings.password),
+            "device": device["name"] if device else None,
+        }
 
     @app.post("/api/login")
     async def login(payload: dict[str, str]) -> JSONResponse:
@@ -117,31 +161,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_TTL, httponly=True, samesite="strict")
         return response
 
-    # ------------------------------------------------------------------ extension API tokens
-    def require_web_session(request: Request) -> None:
-        # An extension token must not be able to mint or revoke tokens.
-        if request.headers.get("authorization"):
-            raise HTTPException(403, "토큰 관리는 웹 화면에서만 할 수 있습니다.")
-
-    @app.get("/api/tokens")
-    async def list_tokens(request: Request) -> list[dict[str, Any]]:
-        require_web_session(request)
-        return db.list_api_tokens()
-
-    @app.post("/api/tokens")
-    async def create_token(request: Request, payload: dict[str, str]) -> dict[str, Any]:
-        require_web_session(request)
-        name = str(payload.get("name", "")).strip()[:100] or "브라우저 확장"
+    # ------------------------------------------------------------------ extension pairing
+    def issue_device(name: str) -> tuple[str, str]:
+        device_id = uuid.uuid4().hex[:12]
         token = "ct_" + secrets.token_urlsafe(32)
-        token_id = uuid.uuid4().hex[:12]
-        db.create_api_token(token_id, name, hashlib.sha256(token.encode("utf-8")).hexdigest())
-        # The plain token is returned once and never stored.
-        return {"id": token_id, "name": name, "token": token}
+        db.create_device(device_id, name, hashlib.sha256(token.encode("utf-8")).hexdigest())
+        return device_id, token
 
-    @app.delete("/api/tokens/{token_id}")
-    async def delete_token(request: Request, token_id: str) -> dict[str, bool]:
-        require_web_session(request)
-        db.delete_api_token(token_id)
+    pairing = Pairing(issue_device, db.delete_device)
+
+    def pairing_call(fn, *args):
+        try:
+            return fn(*args)
+        except PairingError as exc:
+            raise HTTPException(exc.status, str(exc)) from exc
+
+    @app.post("/api/pair/start")
+    async def pair_start(payload: dict[str, Any]) -> dict[str, Any]:
+        if not settings.password:
+            raise HTTPException(400, "비밀번호가 없는 서버는 페어링 없이 연결됩니다.")
+        return pairing_call(pairing.start, str(payload.get("name", "")))
+
+    @app.post("/api/pair/poll")
+    async def pair_poll(payload: dict[str, Any]) -> dict[str, Any]:
+        return pairing.poll(str(payload.get("id", "")), str(payload.get("secret", "")))
+
+    @app.get("/api/pair/requests")
+    async def pair_requests() -> list[dict[str, Any]]:
+        return pairing.pending()
+
+    @app.post("/api/pair/requests/{request_id}/approve")
+    async def pair_approve(request_id: str) -> dict[str, Any]:
+        return {"ok": True, "name": pairing_call(pairing.approve, request_id)}
+
+    @app.post("/api/pair/requests/{request_id}/deny")
+    async def pair_deny(request_id: str) -> dict[str, bool]:
+        pairing_call(pairing.deny, request_id)
+        return {"ok": True}
+
+    @app.post("/api/pair/unpair")
+    async def pair_unpair(request: Request) -> dict[str, bool]:
+        device = request.state.device
+        if not device:
+            raise HTTPException(400, "연결된 확장 프로그램에서만 사용할 수 있습니다.")
+        db.delete_device(device["id"])
+        return {"ok": True}
+
+    @app.get("/api/devices")
+    async def list_devices() -> list[dict[str, Any]]:
+        return db.list_devices()
+
+    @app.delete("/api/devices/{device_id}")
+    async def delete_device(device_id: str) -> dict[str, bool]:
+        db.delete_device(device_id)
         return {"ok": True}
 
     # ------------------------------------------------------------------ meta
