@@ -13,7 +13,7 @@ if [[ ! -d "$SRC/.git" ]]; then
     git clone --depth 1 --branch "$KOHARU_TAG" https://github.com/koharu-rs/koharu.git "$SRC"
 fi
 
-# 1. DGX Spark ships driver 580 (CUDA 13.0). Koharu gates on 13.3 although its
+# 1. On the tested CUDA 13.0 driver (580), Koharu gates on 13.3 although its
 #    CUDA 13.x runtime packages run under CUDA minor-version compatibility.
 sed -i 's/const MIN_DRIVER_VERSION: c_int = 13030;/const MIN_DRIVER_VERSION: c_int = 13000;/' \
     "$SRC/crates/koharu-runtime/src/hardware/cuda.rs"
@@ -31,7 +31,7 @@ fi
 # 2. Batch driver binary and the extra dependencies it needs.
 install -m 0644 "$ROOT/engines/koharu/ct_batch.rs" "$SRC/crates/koharu-pipeline/src/bin/ct_batch.rs"
 MANIFEST="$SRC/crates/koharu-pipeline/Cargo.toml"
-for dep in 'serde_json = { workspace = true }' 'url = { workspace = true }' 'koharu-secrets = { workspace = true }'; do
+for dep in 'serde_json = { workspace = true }' 'url = { workspace = true }' 'koharu-secrets = { workspace = true }' 'sha2 = "0.10"' 'tempfile = { workspace = true }'; do
     name="${dep%% *}"
     grep -q "^$name = " "$MANIFEST" || sed -i "/^\[dependencies\]/a $dep" "$MANIFEST"
 done

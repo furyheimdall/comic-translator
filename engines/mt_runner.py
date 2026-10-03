@@ -5,21 +5,30 @@ MangaTranslator's CLI does not pass a progress callback to
 (`{"progress": 0.0-1.0, "message": "..."}`) prefixed with `@@CT@@` so the
 parent process can parse them out of the regular log stream.
 
-Usage: python mt_runner.py <MangaTranslator dir> -- <main.py arguments...>
+Usage: python mt_runner.py <MangaTranslator dir> [--ct-cache-dir <dir>] -- <main.py arguments...>
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+from pathlib import Path
 import sys
 
 
 def main() -> None:
-    mt_dir = sys.argv[1]
-    if sys.argv[2] != "--":
-        raise SystemExit("usage: mt_runner.py <dir> -- <args>")
-    args = sys.argv[3:]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("mt_dir")
+    parser.add_argument("--ct-cache-dir", type=Path)
+    try:
+        separator = sys.argv.index("--")
+    except ValueError:
+        parser.error("expected -- before MangaTranslator arguments")
+    options = parser.parse_args(sys.argv[1:separator])
+    mt_dir = str(Path(options.mt_dir).resolve())
+    cache_dir = options.ct_cache_dir.resolve() if options.ct_cache_dir else None
+    args = sys.argv[separator + 1:]
     os.chdir(mt_dir)
     sys.path.insert(0, mt_dir)
 
@@ -43,6 +52,11 @@ def main() -> None:
             raise TranslationError(f"API failed: {exc}") from exc
 
     mt_translation.call_openai_compatible_endpoint = proxy_endpoint
+
+    if cache_dir is not None:
+        from mt_cache import install  # noqa: PLC0415
+
+        install(mt_pipeline, mt_translation, cache_dir, mt_dir)
 
     original = mt_pipeline.batch_translate_images
 

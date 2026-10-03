@@ -24,7 +24,7 @@ REQUIRED = frozenset({
     "web/index.html", "web/app.js", "web/style.css",
     "scripts/install.py", "scripts/package_release.py",
     "scripts/setup_koharu.sh", "scripts/setup_mangatranslator.sh",
-    "engines/mt_runner.py", "engines/koharu/ct_batch.rs", "engines/koharu/quality.patch",
+    "engines/mt_runner.py", "engines/mt_cache.py", "engines/koharu/ct_batch.rs", "engines/koharu/quality.patch",
     "tests/fixtures/make_sample_pages.py",
 })
 EXACT = REQUIRED

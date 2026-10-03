@@ -221,7 +221,7 @@ class JobManager:
         for index, (name, data) in enumerate(images, start=1):
             file = f"{index:04d}{image_suffix(data)}"
             (input_dir / file).write_bytes(data)
-            pages.append({"job_id": job_id, "idx": index, "source_name": name, "file": file})
+            pages.append({"job_id": job_id, "idx": index, "source_name": name, "file": file, "sha256": hashlib.sha256(data).hexdigest()})
         self.db.create_job(
             {
                 "id": job_id,
@@ -393,8 +393,13 @@ class JobManager:
         job = self.db.get_job(job_id)
         if job and job["status"] == "running":
             raise IngestError("실행 중인 작업은 먼저 취소하세요.")
+        directory = self.job_dir(job_id)
+        try:
+            if directory.exists():
+                shutil.rmtree(directory)
+        except OSError as exc:
+            raise IngestError(f"작업 파일을 삭제하지 못했습니다: {exc}") from exc
         self.db.delete_job(job_id)
-        shutil.rmtree(self.job_dir(job_id), ignore_errors=True)
 
     def archive(self, job_id: str) -> Path:
         """CBZ of translated pages in reading order (built on demand, cached)."""
@@ -457,6 +462,7 @@ class JobManager:
                         None if live else (done + progress * len(pending)) / max(len(pages), 1), message,
                     ),
                     watch_idle_seconds=self.live_idle_seconds if live else None,
+                    cache_dir=self.job_dir(job_id) / "private-cache" if not live and job["engine"] in ("koharu", "mangatranslator") else None,
                 )
                 # Under the lock, so a live page added concurrently is either
                 # listed here or linked into input_dir by add_live_page.
@@ -467,6 +473,8 @@ class JobManager:
                         (input_dir / page["file"]).symlink_to(self.input_path(job_id, page).resolve())
                     if live:
                         self._live = (input_dir, run)
+                if pending and run.cache_dir is not None:
+                    self._reuse_cached_pages(job_id, job["engine"], job["options"], run.cache_dir, pending)
                 try:
                     if pending:
                         engine.run(run)
@@ -501,6 +509,33 @@ class JobManager:
         finally:
             with self._lock:
                 self._current = None
+
+    def _reuse_cached_pages(self, job_id: str, engine: str, options: str, cache_dir: Path, pending: list[dict[str, Any]]) -> None:
+        """Copy immutable preprocess checkpoints into this job's private lifetime."""
+        cache_dir.mkdir(exist_ok=True)
+        for page in pending:
+            stem = Path(page["file"]).stem
+            target = cache_dir / stem
+            if target.exists():
+                continue
+            digest = page["sha256"] or hashlib.sha256(self.input_path(job_id, page).read_bytes()).hexdigest()
+            for candidate in self.db.find_cached_pages(digest, engine, options, job_id):
+                source = self.job_dir(candidate["job_id"]) / "private-cache" / Path(candidate["file"]).stem
+                payload = source / ("session" if engine == "koharu" else "payload.zip")
+                if not (source / "manifest.json").is_file() or not (payload.is_dir() if engine == "koharu" else payload.is_file()):
+                    continue
+                temporary = cache_dir / f".{stem}-{uuid.uuid4().hex}"
+                try:
+                    shutil.copytree(source, temporary)
+                    temporary.rename(target)
+                except OSError:
+                    # A deleted or damaged source cache is a miss, not a failed translation.
+                    pass
+                finally:
+                    if temporary.exists():
+                        shutil.rmtree(temporary)
+                if target.exists():
+                    break
 
     def _finish_live(self, job_id: str, run: EngineRun) -> None:
         """After the engine went idle: record page errors, requeue pages it never saw."""

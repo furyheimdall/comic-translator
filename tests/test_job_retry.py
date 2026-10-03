@@ -7,6 +7,7 @@ from PIL import Image
 
 from app.db import Database
 from app.jobs import IngestError, JobManager
+from engines.mt_cache import _Page
 
 
 def image_bytes(color):
@@ -155,3 +156,83 @@ def test_invalid_replacement_provider_does_not_destroy_results_or_queue(job, fai
         manager.retry(job_id, failed_only=failed_only, provider_id="missing")
     assert db.get_job(job_id) == before
     assert output.read_bytes() == original
+
+
+@pytest.mark.parametrize("engine_id,payload_name", [
+    ("koharu", "session/erased.png"),
+    ("mangatranslator", "payload.zip"),
+])
+def test_identical_uploaded_page_reuses_private_cache_without_exporting_it(tmp_path, engine_id, payload_name):
+    db = Database(tmp_path / "app.db")
+    engine = SelectiveEngine()
+    engine.fail = set()
+    manager = JobManager(db, tmp_path / "jobs", {engine_id: engine}, lambda: ("http://unused", "secret"))
+    image = image_bytes("white")
+
+    def create(name, content, options=None):
+        return manager.create(
+            title=name, engine_id=engine_id, provider_id=name,
+            options=options or {"ocr": "paddleocr-vl-1.6"}, instructions="",
+            images=[(name + ".png", content)],
+        )
+
+    first = create("first-model", image)
+    first_page = db.list_pages(first)[0]
+    first_cache = manager.job_dir(first) / "private-cache" / "0001"
+    payload = first_cache / payload_name
+    payload.parent.mkdir(parents=True)
+    payload.write_bytes(image_bytes("blue"))
+    (first_cache / "manifest.json").write_text("{}")
+
+    replacement = create("second-model", image)
+    page = db.list_pages(replacement)[0]
+    assert page["sha256"] == first_page["sha256"]
+    manager._run(db.get_job(replacement))
+    own_cache = manager.job_dir(replacement) / "private-cache" / "0001"
+    assert (own_cache / payload_name).read_bytes() == payload.read_bytes()
+
+    changed = create("changed-image", image + b"trailing bytes")
+    manager._run(db.get_job(changed))
+    assert not (manager.job_dir(changed) / "private-cache" / "0001").exists()
+    other_ocr = create("other-ocr", image, {"ocr": "manga-ocr"})
+    manager._run(db.get_job(other_ocr))
+    assert not (manager.job_dir(other_ocr) / "private-cache" / "0001").exists()
+
+    with zipfile.ZipFile(manager.archive(replacement)) as archive:
+        assert archive.namelist() == ["0001.png"]
+    manager.delete(first)
+    assert (own_cache / payload_name).exists()
+    manager.retry(replacement)
+    assert own_cache.exists()  # A full retranslation drops output, not image preprocessing.
+    manager.delete(replacement)
+    assert not manager.job_dir(replacement).exists()
+    db._conn.close()
+
+
+def test_delete_keeps_job_visible_when_private_cache_cannot_be_removed(job, monkeypatch):
+    db, _engine, manager, job_id = job
+    cache = manager.job_dir(job_id) / "private-cache"
+    cache.mkdir()
+
+    def refuse_remove(_directory):
+        raise PermissionError("read-only volume")
+
+    monkeypatch.setattr("app.jobs.shutil.rmtree", refuse_remove)
+    with pytest.raises(IngestError, match="삭제하지 못했습니다"):
+        manager.delete(job_id)
+    assert db.get_job(job_id) is not None
+    assert cache.exists()
+
+
+def test_transient_ocr_failure_is_not_kept_as_a_retranslation_checkpoint(tmp_path):
+    source = tmp_path / "0001.png"
+    source.write_bytes(image_bytes("white"))
+    cache = tmp_path / "private-cache"
+    checkpoint = _Page(cache, source, "same-preprocessing")
+    try:
+        text = checkpoint.stage("_perform_manga_ocr", lambda _images: ["[OCR FAILED]"], (["crop"],), {})
+        checkpoint.publish()
+        assert text == ["[OCR FAILED]"]  # Preserve upstream's error handling.
+        assert not (cache / "0001" / "manifest.json").exists()
+    finally:
+        checkpoint.close()

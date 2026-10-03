@@ -85,6 +85,23 @@ def test_cached_translation_is_not_reused_across_model_choices(live):
     assert manager.add_live_page(job_id, "a", image_bytes("red"))["translated"] is True
 
 
+def test_live_page_does_not_reuse_a_regular_jobs_output(live):
+    db, _engine, manager, live_id = live
+    original = image_bytes("red")
+    regular = manager.create(
+        title="regular", engine_id="watch", provider_id="p",
+        options={}, instructions="", images=[("page.png", original)],
+    )
+    output = manager.job_dir(regular) / "output"
+    output.mkdir()
+    (output / "0001.png").write_bytes(image_bytes("blue"))
+    db.set_page_output(regular, 1, "0001.png")
+
+    result = manager.add_live_page(live_id, "same source", original)
+    assert result["translated"] is False
+    assert pages(db, live_id)[result["idx"]]["output"] is None
+
+
 def test_new_work_for_another_session_asks_the_idle_engine_to_exit(live):
     db, engine, manager, job_id = live
     other = manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="x", llm={"reasoning": "off"})

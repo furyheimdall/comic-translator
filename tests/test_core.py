@@ -145,3 +145,24 @@ def test_login_accepts_utf8_password_and_rejects_mismatch(tmp_path):
         assert client.get("/api/jobs").status_code == 401
         assert client.post("/api/login", json={"password": credential}).status_code == 200
         assert client.get("/api/jobs").json() == []
+
+
+def test_configured_mt_interpreter_loads_its_virtualenv_packages(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    import venv
+
+    from app.settings import load_settings
+
+    environment = tmp_path / "mt" / ".venv"
+    venv.create(environment, with_pip=False, symlinks=True)
+    package_dir = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    (package_dir / "engine_only.py").write_text("VALUE = 42\n")
+    monkeypatch.setenv("CT_MT_PYTHON", str(environment / "bin" / "python"))
+
+    process = subprocess.run(
+        [str(load_settings().mt_python), "-c", "import engine_only; print(engine_only.VALUE)"],
+        capture_output=True, text=True,
+    )
+    assert process.returncode == 0, process.stderr
+    assert process.stdout.strip() == "42"
