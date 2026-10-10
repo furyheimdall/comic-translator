@@ -84,6 +84,7 @@ class Database:
             if column not in columns:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         self._conn.execute("CREATE INDEX IF NOT EXISTS pages_sha256 ON pages (sha256) WHERE output IS NOT NULL")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS pages_cache_sha256 ON pages (sha256) WHERE sha256 IS NOT NULL")
         self._lock = threading.Lock()
 
     def _exec(self, sql: str, params: tuple | dict = ()) -> sqlite3.Cursor:
@@ -250,10 +251,22 @@ class Database:
     def find_translated_page(self, sha256: str, provider_id: str, llm: str) -> dict[str, Any] | None:
         return self._one(
             """SELECT pages.* FROM pages JOIN jobs ON jobs.id = pages.job_id
-               WHERE pages.sha256 = ? AND pages.output IS NOT NULL AND jobs.provider_id = ? AND jobs.llm = ?
+               WHERE pages.sha256 = ? AND pages.output IS NOT NULL AND jobs.live = 1
+               AND jobs.provider_id = ? AND jobs.llm = ?
                ORDER BY pages.rowid DESC LIMIT 1""",
             (sha256, provider_id, llm),
         )
+
+    def find_cached_pages(self, sha256: str, engine: str, options: str, excluded_job_id: str) -> list[dict[str, Any]]:
+        """Find independent jobs with the same source bytes, engine and preprocessing options."""
+        return self._all(
+            """SELECT pages.job_id, pages.file FROM pages JOIN jobs ON jobs.id = pages.job_id
+               WHERE pages.sha256 = ? AND jobs.engine = ? AND jobs.live = 0
+               AND jobs.options = ? AND pages.job_id != ?
+               ORDER BY pages.rowid DESC""",
+            (sha256, engine, options, excluded_job_id),
+        )
+
 
     def set_page_error(self, job_id: str, idx: int, error: str | None) -> None:
         self._exec("UPDATE pages SET error = ? WHERE job_id = ? AND idx = ?", (error, job_id, idx))

@@ -1,9 +1,9 @@
 """Image-processing engines (detection → OCR → inpainting → Korean typesetting).
 
 Each engine runs as a child process so its GPU memory is released as soon as
-the job ends — the DGX Spark shares RAM between the LLM server and vision
-models. Engines reach the LLM only through the internal OpenAI-compatible
-proxy (`/llm/v1`), so every configured provider works with both engines.
+the job ends. On unified-memory GPUs, LLM and vision workers share system RAM.
+Engines reach the LLM only through the internal OpenAI-compatible proxy
+(`/llm/v1`), so every configured provider works with both engines.
 """
 
 from __future__ import annotations
@@ -39,6 +39,8 @@ class EngineRun:
     started_files: set[str] = field(default_factory=set)
     # Live sessions keep the engine resident and feed pages into input_dir.
     watch_idle_seconds: int | None = None
+    # Per-job intermediate state; browser-extension live sessions do not use it.
+    cache_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -173,8 +175,19 @@ class Engine:
 def _redact(argv: list[str]) -> list[str]:
     redacted: list[str] = []
     hide_next = False
+    skip_next = False
     for arg in argv:
-        redacted.append("***" if hide_next else arg)
+        if skip_next:
+            skip_next = False
+            continue
+        if hide_next:
+            redacted.append("***")
+            hide_next = False
+            continue
+        if arg in ("--cache-dir", "--ct-cache-dir"):
+            skip_next = True
+            continue
+        redacted.append(arg)
         hide_next = arg in ("--openai-compatible-api-key", "--api-key", "--osb-hf-token")
     return redacted
 
@@ -272,7 +285,10 @@ class MangaTranslatorEngine(Engine):
                 "--osb-inpainting-method", opts["inpainting"],
                 "--osb-flux-backend", "sdnq",
             ]
-        argv = [str(self.settings.mt_python), str(Path(__file__).resolve().parent.parent / "engines" / "mt_runner.py"), str(self.settings.mt_dir), "--", *args]
+        argv = [str(self.settings.mt_python), str(Path(__file__).resolve().parent.parent / "engines" / "mt_runner.py"), str(self.settings.mt_dir)]
+        if run.cache_dir is not None:
+            argv += ["--ct-cache-dir", str(run.cache_dir)]
+        argv += ["--", *args]
         return argv, env, self.settings.mt_dir
 
 
@@ -324,6 +340,8 @@ class KoharuEngine(Engine):
             argv += ["--instructions", run.instructions]
         if opts["vision"]:
             argv.append("--vision")
+        if run.cache_dir is not None:
+            argv += ["--cache-dir", str(run.cache_dir)]
         if run.watch_idle_seconds is not None:
             argv += ["--watch", "--idle-timeout", str(run.watch_idle_seconds)]
         return argv, {"CT_LLM_API_KEY": run.llm_api_key, **self.model_environment(self.id)}, run.output_dir

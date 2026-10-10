@@ -15,6 +15,12 @@ def _path(env: str, default: Path) -> Path:
     return Path(value).expanduser().resolve() if value else default
 
 
+def _executable_path(env: str, default: Path) -> Path:
+    value = os.environ.get(env)
+    # Resolving the final symlink leaves a virtualenv and loses its packages.
+    return Path(value).expanduser().absolute() if value else default
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
@@ -61,7 +67,7 @@ def load_settings() -> Settings:
         password=os.environ.get("CT_PASSWORD") or None,
         public_url=os.environ.get("CT_PUBLIC_URL", f"http://127.0.0.1:{port}"),
         mt_dir=_path("CT_MT_DIR", ROOT / "engines" / "mangatranslator"),
-        mt_python=_path("CT_MT_PYTHON", ROOT / "engines" / "mangatranslator" / ".venv" / "bin" / "python"),
+        mt_python=_executable_path("CT_MT_PYTHON", ROOT / "engines" / "mangatranslator" / ".venv" / "bin" / "python"),
         koharu_bin=_path("CT_KOHARU_BIN", ROOT / "engines" / "koharu-target" / "release" / "ct_batch"),
         koharu_font_family=os.environ.get("CT_KOHARU_FONT", "Noto Sans CJK KR"),
         font_dir=_path("CT_FONT_DIR", ROOT / "fonts" / "korean"),

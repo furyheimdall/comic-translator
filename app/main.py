@@ -27,7 +27,7 @@ from .model_setup import ModelSetup
 from .prompting import build_instructions
 from .providers import (
     KINDS, PRESETS, REASONING_LABELS, ChatRequest, ProviderConfig, ProviderError, chat, completion_envelope,
-    list_models, reasoning_levels, with_overrides,
+    list_models, reasoning_levels, verify_configured_model, with_overrides,
 )
 from .pairing import Pairing, PairingError
 from .secretbox import SecretBox, read_or_create_token
@@ -399,6 +399,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         config = provider_config(require_provider(provider_id))
         started = time.time()
         try:
+            await verify_configured_model(config)
             text = await chat(
                 config,
                 ChatRequest(
