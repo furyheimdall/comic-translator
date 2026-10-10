@@ -623,7 +623,7 @@ index 34a23f0..e83b7df 100644
      async fn translation_and_inpainting_compose_without_weakening_text_guards() {
          let mut session = koharu_scene::Session::memory().await.unwrap();
 diff --git a/crates/koharu-renderer/src/layout.rs b/crates/koharu-renderer/src/layout.rs
-index 863af66..d66970c 100644
+index 863af66..a8f5518 100644
 --- a/crates/koharu-renderer/src/layout.rs
 +++ b/crates/koharu-renderer/src/layout.rs
 @@ -16,7 +16,10 @@ use skrifa::{MetadataProvider, instance::Size};
@@ -668,29 +668,30 @@ index 863af66..d66970c 100644
      pub fn run(&self, text: &str) -> Result<LayoutRun<'a>> {
          if let Some(font_size) = self.font_size {
              return self.run_with_size(text, font_size);
-@@ -370,6 +382,38 @@ impl<'a> TextLayout<'a> {
+@@ -370,6 +382,39 @@ impl<'a> TextLayout<'a> {
      }
  
      fn run_auto(&self, text: &str) -> Result<LayoutRun<'a>> {
 +        let kept = self.run_auto_with_breaks(text)?;
-+        if self.comic_balloon.is_some()
-+            || self.writing_mode.is_vertical()
-+            || !self
-+                .max_width
-+                .zip(self.max_height)
-+                .is_some_and(|(width, height)| width < height)
++        let balloon = self.comic_balloon.is_some();
++        if self.writing_mode.is_vertical()
++            || (!balloon
++                && !self
++                    .max_width
++                    .zip(self.max_height)
++                    .is_some_and(|(width, height)| width < height))
 +            || !contains_korean(text)
 +            || self.korean_source_font_size.is_none_or(|source_size| {
-+                kept.font_size >= source_size * 0.5
++                kept.font_size >= source_size * if balloon { 0.75 } else { 0.5 }
 +            })
 +        {
 +            return Ok(kept);
 +        }
 +
-+        // Korean normally keeps words intact. In a narrow region inherited from
-+        // vertical source text, the fitted glyphs can shrink below half the
-+        // detected source font size just to preserve a long Korean word. Only
-+        // then try syllable opportunities, and require a visible size gain.
++        // Keep Korean words intact when they fit legibly. In narrow balloons a
++        // single long word can pin the whole translation to the 9px floor even
++        // though splitting that word would use the balloon's height instead.
++        // Narrow free text keeps its more conservative existing threshold.
 +        let mut fallback = self.clone();
 +        fallback.korean_syllable_breaks = true;
 +        let wrapped = fallback.run_auto_with_breaks(text)?;
@@ -707,7 +708,7 @@ index 863af66..d66970c 100644
          let max_height = self.max_height.unwrap_or(f32::INFINITY);
          let max_width = self.max_width.unwrap_or(f32::INFINITY);
          let maximum = self.max_font_size.unwrap_or(300.0).max(0.5);
-@@ -462,7 +506,11 @@ impl<'a> TextLayout<'a> {
+@@ -462,7 +507,11 @@ impl<'a> TextLayout<'a> {
  
      fn run_with_size(&self, text: &str, font_size: f32) -> Result<LayoutRun<'a>> {
          let shaper = TextShaper::new();
@@ -721,7 +722,7 @@ index 863af66..d66970c 100644
              && self.hyphenation_policy != HyphenationPolicy::Disabled
              && let Some(lang) = self.hyphenation_lang
 diff --git a/crates/koharu-renderer/src/segment.rs b/crates/koharu-renderer/src/segment.rs
-index 8c6c0e4..799d187 100644
+index 8c6c0e4..7ab771e 100644
 --- a/crates/koharu-renderer/src/segment.rs
 +++ b/crates/koharu-renderer/src/segment.rs
 @@ -90,6 +90,7 @@ pub struct LineBreaker {
@@ -740,7 +741,7 @@ index 8c6c0e4..799d187 100644
          }
      }
  
-@@ -126,9 +128,17 @@ impl LineBreaker {
+@@ -126,14 +128,23 @@ impl LineBreaker {
          self
      }
  
@@ -755,11 +756,46 @@ index 8c6c0e4..799d187 100644
      /// Returns a vector of line break opportunities in the given text.
      pub fn line_break_opportunities(&self, text: &str) -> Vec<LineBreakOpportunity> {
 -        let segmenter = if contains_korean(text) {
-+        let segmenter = if contains_korean(text) && !self.korean_syllable_breaks {
++        let korean = contains_korean(text);
++        let segmenter = if korean && !self.korean_syllable_breaks {
              &self.korean_segmenter
          } else {
              &self.segmenter
-@@ -287,7 +297,7 @@ fn chinese_word_ranges(text: &str) -> Vec<Range<usize>> {
+         };
+-        let opportunities = segmenter
++        let mut opportunities: Vec<_> = segmenter
+             .segment_str(text)
+             .map(|break_pos| LineBreakOpportunity {
+                 offset: break_pos,
+@@ -148,6 +159,27 @@ impl LineBreaker {
+                 }),
+             })
+             .collect();
++        if korean && self.korean_syllable_breaks {
++            // ICU keeps an elongated dash run and its closing punctuation in
++            // one segment. Only the rescue layout may split between repeated
++            // strokes; keep the original glyphs and the closing ?! together.
++            let mut previous = None;
++            let mut added = false;
++            for (offset, ch) in text.char_indices() {
++                if previous == Some(ch) && matches!(ch, '―' | '—' | '─' | '━' | 'ー') {
++                    opportunities.push(LineBreakOpportunity {
++                        offset,
++                        is_mandatory: false,
++                    });
++                    added = true;
++                }
++                previous = Some(ch);
++            }
++            if added {
++                opportunities.sort_unstable_by_key(|opportunity| opportunity.offset);
++                opportunities.dedup_by_key(|opportunity| opportunity.offset);
++            }
++        }
+ 
+         if contains_chinese(text) {
+             apply_protected_ranges(opportunities, &chinese_word_ranges(text))
+@@ -287,7 +319,7 @@ fn chinese_word_ranges(text: &str) -> Vec<Range<usize>> {
          .collect()
  }
  
@@ -768,7 +804,7 @@ index 8c6c0e4..799d187 100644
      let script_map = CodePointMapData::<IcuScript>::new();
      text.chars()
          .any(|ch| script_map.get(ch) == IcuScript::Hangul)
-@@ -432,18 +442,25 @@ mod tests {
+@@ -432,18 +464,47 @@ mod tests {
      }
  
      #[test]
@@ -801,11 +837,33 @@ index 8c6c0e4..799d187 100644
 +        assert!(!wrapped.iter().any(|segment| {
 +            segment.range.end > latin_start && segment.range.end < latin_end
 +        }));
++    }
++
++    #[test]
++    fn korean_rescue_splits_elongated_strokes_without_dropping_punctuation() {
++        let text = "기다려────────?!";
++        let kept = LineBreaker::new().line_segments(text);
++        let dash_start = text.find('─').unwrap();
++        let dash_end = text.find('?').unwrap();
++        assert!(!kept
++            .iter()
++            .any(|part| (dash_start + 1..dash_end).contains(&part.range.end)));
++
++        let wrapped = LineBreaker::new()
++            .with_korean_syllable_breaks()
++            .line_segments(text);
++        let pieces = wrapped
++            .iter()
++            .map(|part| &text[part.range.clone()])
++            .collect::<Vec<_>>();
++        assert!(pieces.contains(&"─"));
++        assert!(pieces.last().unwrap().ends_with("?!"));
++        assert_eq!(pieces.concat(), text);
      }
  
      #[test]
 diff --git a/crates/koharu-renderer/src/text_renderer.rs b/crates/koharu-renderer/src/text_renderer.rs
-index 4fa40a9..e0a4f95 100644
+index 4fa40a9..26d1b46 100644
 --- a/crates/koharu-renderer/src/text_renderer.rs
 +++ b/crates/koharu-renderer/src/text_renderer.rs
 @@ -197,6 +197,7 @@ impl TextRenderer {
@@ -861,7 +919,7 @@ index 4fa40a9..e0a4f95 100644
              minimum_font_size: 9.0,
              auto_fit: true,
              alignment: TextAlign::Center,
-@@ -469,16 +473,112 @@ mod tests {
+@@ -469,16 +473,188 @@ mod tests {
              word_spacing: 0.0,
              text_inset: [0.0; 4],
              point_text: false,
@@ -979,6 +1037,82 @@ index 4fa40a9..e0a4f95 100644
 +            diagnostic,
 +            RenderDiagnostic::TextOverflow { .. }
 +        )));
++    }
++
++    #[tokio::test]
++    async fn korean_balloon_fits_long_words_above_readability_floor() {
++        let family = FontSystem::new().first_font().unwrap().family_name().to_owned();
++        let fonts = Fonts::new();
++        fonts
++            .prepare(&[FontRequest {
++                family: family.clone(),
++                weight: None,
++                style: None,
++            }])
++            .await
++            .unwrap();
++        for (width, height, text) in [
++            (88.0, 194.0, "우리나라에서 제일 재미있는 만화책이야아아아!"),
++            (71.0, 133.0, "으아아아아아악!"),
++        ] {
++            let mut descriptor = free_text(width, height, text);
++            descriptor.preferred_font = Some(family.clone());
++            descriptor.font_size = Some(17.0);
++            descriptor.balloon_contour = Some(vec![
++                (0.0, 0.0),
++                (width, 0.0),
++                (width, height),
++                (0.0, height),
++            ]);
++            descriptor.text_inset = [4.0; 4];
++            let fitted = TextRenderer::new()
++                .render_descriptor(&descriptor, &fonts)
++                .unwrap();
++            assert!(
++                fitted.metadata.font_size > 9.0,
++                "the translated balloon text collapsed to {}px for {width}x{height}",
++                fitted.metadata.font_size
++            );
++            assert!(fitted.diagnostics.is_empty());
++        }
++    }
++
++    #[tokio::test]
++    async fn korean_balloon_does_not_shrink_for_an_elongated_exclamation() {
++        let family = FontSystem::new().first_font().unwrap().family_name().to_owned();
++        let fonts = Fonts::new();
++        fonts
++            .prepare(&[FontRequest {
++                family: family.clone(),
++                weight: None,
++                style: None,
++            }])
++            .await
++            .unwrap();
++        for text in [
++            "우리 동아리를 얕보는 거냐―――――?!",
++            "우리 동아리를 얕보는 거냐────────?!",
++        ] {
++            let mut descriptor = free_text(78.0, 194.0, text);
++            descriptor.preferred_font = Some(family.clone());
++            descriptor.font_size = Some(15.0);
++            descriptor.balloon_contour = Some(vec![
++                (0.0, 0.0),
++                (78.0, 0.0),
++                (78.0, 194.0),
++                (0.0, 194.0),
++            ]);
++            descriptor.text_inset = [4.0; 4];
++            let fitted = TextRenderer::new()
++                .render_descriptor(&descriptor, &fonts)
++                .unwrap();
++            assert!(
++                fitted.metadata.font_size > 9.0,
++                "elongated Korean exclamation collapsed to {}px: {text}",
++                fitted.metadata.font_size
++            );
++            assert!(fitted.diagnostics.is_empty());
++        }
      }
  
      #[test]

@@ -415,10 +415,9 @@ def with_overrides(config: ProviderConfig, model: str | None, reasoning: str | N
 NON_CHAT_MODEL = re.compile(r"embed|tts|whisper|dall-e|audio|realtime|transcri|moderation|image|search|computer-use|sora", re.I)
 
 
-async def list_models(config: ProviderConfig) -> list[str]:
-    """Chat model ids the provider reports; the configured model always comes first."""
+async def _reported_model_ids(config: ProviderConfig) -> list[str]:
+    """Model ids actually advertised by the endpoint, without the UI's configured-model fallback."""
     secret = config.secret or {}
-    found: list[str] = []
     async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
         if config.kind == "anthropic":
             response = await client.get(
@@ -440,11 +439,35 @@ async def list_models(config: ProviderConfig) -> list[str]:
             response = await client.get(f"{base.rstrip('/')}/models", headers=headers)
         if response.status_code >= 400:
             raise ProviderError(f"모델 목록 HTTP {response.status_code}: {response.text[:300]}", response.status_code)
-        for item in response.json().get("data") or []:
-            model_id = str(item.get("id", "")).removeprefix("models/")
-            if model_id and not NON_CHAT_MODEL.search(model_id):
-                found.append(model_id)
-    return [config.model, *sorted(set(found) - {config.model})]
+        data = response.json()
+        if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+            raise ProviderError("모델 목록 응답 형식이 잘못되었습니다.")
+        return [str(item["id"]) for item in data["data"] if isinstance(item, dict) and item.get("id")]
+
+
+async def list_models(config: ProviderConfig) -> list[str]:
+    """Chat model ids the provider reports; the configured model always comes first."""
+    found = {
+        model.removeprefix("models/")
+        for model in await _reported_model_ids(config)
+        if not NON_CHAT_MODEL.search(model)
+    }
+    return [config.model, *sorted(found - {config.model})]
+
+
+async def verify_configured_model(config: ProviderConfig) -> None:
+    """Fail closed when an OpenAI-compatible endpoint does not advertise the requested model."""
+    if config.kind != "openai_compatible":
+        return
+    try:
+        available = await _reported_model_ids(config)
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ProviderError(f"설정한 모델을 확인할 수 없습니다: {exc}") from exc
+    if config.model not in available:
+        raise ProviderError(
+            f"설정한 모델 '{config.model}'이 서버 모델 목록에 없습니다. "
+            f"제공 모델: {', '.join(available[:5]) or '없음'}"
+        )
 
 
 def _bearer(api_key: str | None, label: str) -> dict[str, str]:
