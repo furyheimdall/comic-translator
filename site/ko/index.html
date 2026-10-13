@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#151613">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="description" content="일본어 만화 원고를 한국어로 번역하고 다시 식자하는 개인용 서버. 파일 업로드와 comic-translator-extension을 통한 웹페이지 실시간 번역을 안내합니다.">
+  <title>comic-translator — 일본어 만화를 한국어로 번역하고 식자하기</title>
+  <link rel="canonical" href="https://furyheimdall.github.io/comic-translator/ko/">
+  <link rel="alternate" hreflang="en" href="https://furyheimdall.github.io/comic-translator/">
+  <link rel="alternate" hreflang="ko" href="https://furyheimdall.github.io/comic-translator/ko/">
+  <link rel="icon" href="../assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="comic-translator — 일본어 만화를 한국어로 번역하고 식자하기">
+  <meta property="og:description" content="원고를 업로드해 원본과 결과를 비교하거나, 별도 Chrome 확장으로 웹페이지의 만화 이미지를 내 서버에서 번역합니다.">
+  <meta property="og:url" content="https://furyheimdall.github.io/comic-translator/ko/">
+  <meta property="og:locale" content="ko_KR">
+  <meta property="og:locale:alternate" content="en_US">
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html" aria-label="comic-translator 첫 화면"><img src="../assets/mark.svg" width="36" height="36" alt=""><span>comic-translator</span></a>
+      <nav class="site-nav" aria-label="주요 메뉴">
+        <a href="#files">원고 번역</a>
+        <a href="#extension">브라우저 확장</a>
+        <a href="#install">설치</a>
+        <a href="#downloads">다운로드</a>
+        <a href="https://github.com/furyheimdall/comic-translator">소스 코드</a>
+      </nav>
+      <a class="lang-switch" href="../index.html" lang="en" hreflang="en">English</a>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section class="hero container" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">내 서버에서 하는 만화 번역 <span class="version">서버 v0.5.0</span></p>
+        <h1 id="hero-title">일본어 만화를<br><em>한국어로 다시 식자합니다.</em></h1>
+        <p class="lead">원고를 업로드해 한 장씩 확인하거나, Chrome 확장으로 웹페이지에서 바로 읽을 수 있습니다. 서버가 일본어 글자를 찾아 지우고 대사를 번역한 뒤 한국어를 이미지에 조판합니다.</p>
+        <div class="actions"><a class="button primary" href="#install">서버 설치하기</a><a class="button secondary" href="#extension">확장 프로그램 연동</a></div>
+        <p class="hero-note">Linux 소스 설치 · GPU 엔진과 모델은 별도 준비 · LLM 제공자 또는 실행 중인 로컬 LLM 필요</p>
+      </div>
+      <figure class="comparison">
+        <img src="../assets/comparison.svg" width="940" height="430" alt="같은 만화 장면을 두 번 그린 개념도. 왼쪽 말풍선에는 일본어 대사 ‘先輩、まだいたんですか？’, 오른쪽 말풍선에는 그 대사의 한국어 번역 ‘선배, 아직 계셨어요?’가 들어 있다.">
+        <figcaption><span class="label">개념도</span> 같은 장면·같은 대사를 번역 전후로 표시했습니다. 실제 앱 스크린샷은 아니며, 자동 번역 결과는 원문과 대조해 확인하세요.</figcaption>
+      </figure>
+    </section>
+
+    <section class="section" id="files" aria-labelledby="files-title">
+      <div class="container split">
+        <div class="section-heading"><p class="kicker">01 / 원고 업로드</p><h2 id="files-title">번역한 쪽을 원본 쪽과 비교하세요.</h2><p>이미지 여러 장, ZIP/CBZ, PDF를 업로드합니다. 서버가 작업을 차례로 처리하고 웹 화면에 진행 상태와 로그를 보여 줍니다. 비교 뷰어에서 원본과 번역본을 확인한 뒤 ZIP/CBZ로 내려받을 수 있습니다.</p><a class="text-link" href="https://github.com/furyheimdall/comic-translator#%EB%AA%A8%EB%8D%B8-%EC%A4%80%EB%B9%84llm-%EC%97%B0%EA%B2%B0%EC%B2%AB-%EB%B2%88%EC%97%AD">첫 번역 안내 읽기 <span aria-hidden="true">↗</span></a></div>
+        <div class="feature-stack">
+          <article class="feature"><span class="feature-number">01</span><div><h3>같은 쪽에서 원본과 결과 비교</h3><p>대사와 글자 크기를 확인하고 필요한 부분을 검토합니다. 작은 글씨나 효과음 일부는 인식되지 않을 수 있습니다.</p></div></article>
+          <article class="feature"><span class="feature-number">02</span><div><h3>엔진과 번역 제공자 선택</h3><p>파일 작업에는 Koharu 또는 MangaTranslator를 사용합니다. LLM은 로컬 OpenAI 호환 서버나 지원하는 외부 제공자에 연결합니다.</p></div></article>
+          <article class="feature"><span class="feature-number">03</span><div><h3>필요한 쪽만 다시 처리</h3><p>실패·미완료 쪽을 재시도하거나, 같은 엔진 옵션의 전처리 결과를 재사용해 다른 LLM으로 다시 번역합니다.</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-tint" id="extension" aria-labelledby="extension-title">
+      <div class="container">
+        <div class="section-heading wide"><p class="kicker">02 / 웹페이지에서 읽기</p><h2 id="extension-title">확장 프로그램을 내 서버에 연결합니다.</h2><p>별도 저장소의 <a href="https://github.com/furyheimdall/comic-translator-extension">comic-translator-extension</a>이 웹페이지의 이미지 파일을 서버로 보내고, 돌아온 번역 PNG를 그 자리에 표시합니다. 실시간 번역은 Koharu 엔진을 사용합니다.</p></div>
+        <ol class="steps">
+          <li><h3>서버 준비</h3><p><a href="#install">서버를 설치</a>하고 웹 UI의 <strong>모델 준비</strong>에서 Koharu 모델을 준비합니다. <strong>LLM 제공자</strong>도 연결합니다.</p></li>
+          <li><h3>Chrome 확장 설치</h3><p><a href="https://github.com/furyheimdall/comic-translator-extension/releases">확장 프로그램 릴리즈 ZIP</a>을 받아 압축을 풉니다. Chrome 120 이상에서 <code>chrome://extensions</code> → 개발자 모드 → <strong>압축해제된 확장 프로그램 로드</strong>로 폴더를 선택합니다.</p></li>
+          <li><h3>6자리 코드로 페어링</h3><p>확장 팝업의 <strong>설정 열기</strong>에서 <strong>서버 주소</strong>를 입력하고 <strong>페어링 요청</strong>을 누릅니다. 서버 웹 UI의 <strong>확장 프로그램 → 연결 요청</strong>에서 코드를 대조하고 5분 안에 <strong>승인</strong>합니다. 비밀번호 없는 로컬 서버는 페어링 대신 연결 테스트만 하면 됩니다.</p></li>
+          <li><h3>번역 설정 저장</h3><p>확장 설정에서 연결된 제공자와 모델, 지원하는 추론 수준을 선택하고 <strong>설정 저장</strong>을 누릅니다. 목록은 서버가 제공합니다.</p></li>
+          <li><h3>원하는 이미지 번역</h3><p>이미지에서 오른쪽 클릭 → <strong>이 이미지 번역</strong>을 선택하거나 팝업의 <strong>이 사이트 번역</strong>을 켭니다. 팝업의 <strong>원본 보기 / 번역 보기</strong>로 화면 표시를 바꿀 수 있습니다.</p></li>
+        </ol>
+        <p class="callout">다른 컴퓨터의 서버에 연결할 때는 그 컴퓨터의 LAN IP와 실제 포트를 입력하세요. 기본 설치 주소 <code>127.0.0.1:8710</code>은 서버 컴퓨터에서만 접속됩니다. <a href="https://github.com/furyheimdall/comic-translator#%EC%84%A4%EC%B9%98-%ED%8C%8C%EB%9D%BC%EB%AF%B8%ED%84%B0">LAN 설치 안내</a>에 따라 바인딩 주소와 로그인 비밀번호를 설정해야 합니다.</p>
+      </div>
+    </section>
+
+    <section class="section" id="install" aria-labelledby="install-title">
+      <div class="container split">
+        <div class="section-heading"><p class="kicker">03 / 시작하기</p><h2 id="install-title">Linux 서버에 설치합니다.</h2><p>Python 3.12 이상, uv, 엔진별 의존성을 먼저 준비해야 합니다. 설치기는 사용자 서비스를 만들지만 기본값으로 시작하거나 자동 시작을 켜지 않습니다. 소스 패키지에는 모델·폰트·GPU 엔진이 들어 있지 않습니다.</p><a class="text-link" href="https://github.com/furyheimdall/comic-translator#%EC%A7%80%EC%9B%90-%ED%99%98%EA%B2%BD%EA%B3%BC-%EC%A4%80%EB%B9%84%EB%AC%BC">준비물과 설치 옵션 확인 <span aria-hidden="true">↗</span></a></div>
+        <div class="install-panel"><p class="panel-label">로컬 설치 · 기본 127.0.0.1:8710</p><pre><code>git clone https://github.com/furyheimdall/comic-translator.git
+cd comic-translator
+python3 scripts/install.py --engine koharu
+systemctl --user start comic-translator</code></pre><p>서버 웹 UI에서 사용할 모델을 준비하고 LLM 제공자를 연결한 뒤 원고를 올리세요. 다른 기기에서 접속하려면 로그인 비밀번호가 필요한 LAN 설치 방법을 따르세요.</p></div>
+      </div>
+    </section>
+
+    <section class="section section-tint" id="downloads" aria-labelledby="downloads-title">
+      <div class="container">
+        <div class="section-heading wide"><p class="kicker">다운로드와 사용 범위</p><h2 id="downloads-title">서버와 확장을 따로 설치합니다.</h2></div>
+        <div class="download-grid">
+          <article class="download-card"><p class="card-type">Linux 소스 · v0.5.0</p><h3>comic-translator 서버</h3><p>웹 앱, 설치기, 엔진 연동 코드가 들어 있습니다. 모델과 사용할 LLM은 별도로 준비합니다.</p><a class="button secondary" href="https://github.com/furyheimdall/comic-translator/releases">서버 릴리즈 <span aria-hidden="true">↗</span></a></article>
+          <article class="download-card"><p class="card-type">Chrome 확장 · v1.5.0</p><h3>comic-translator-extension</h3><p>릴리즈 ZIP을 압축해제된 확장으로 로드합니다. 확장 1.1.0 이상은 서버 v0.4.0 이상이 필요합니다.</p><a class="button secondary" href="https://github.com/furyheimdall/comic-translator-extension/releases">확장 릴리즈 <span aria-hidden="true">↗</span></a></article>
+        </div>
+        <p class="fine-print">번역 권한이 있는 콘텐츠에만 사용하세요. 웹페이지 이미지는 사용자가 설정한 서버로 전송되며, 선택한 LLM 제공자에 따라 글자나 이미지가 외부로 전송될 수 있습니다. LAN의 HTTP는 로그인 정보와 페어링 토큰을 암호화하지 않으므로 신뢰할 수 있는 내부망·VPN·HTTPS를 사용하고 서버를 인터넷에 직접 공개하지 마세요. 확장은 웹페이지 이미지용이며 canvas 전용 뷰어나 브라우저 PDF 뷰어는 처리하지 않습니다. 이 소개 페이지에서는 번역이 실행되지 않습니다.</p>
+      </div>
+    </section>
+  </main>
+  <footer class="footer"><div class="container footer-inner"><span>comic-translator · <a href="https://github.com/furyheimdall/comic-translator/blob/main/LICENSE">Apache-2.0</a></span><div><a href="https://github.com/furyheimdall/comic-translator#readme">설치 문서</a><a href="https://github.com/furyheimdall/comic-translator-extension#readme">확장 안내</a><a href="#main">맨 위로 ↑</a></div></div></footer>
+</body>
+</html>

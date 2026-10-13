@@ -55,6 +55,35 @@ def test_archive_contains_only_allowlisted_source_with_portable_metadata(tmp_pat
     assert not set(excluded) & files.keys()
 
 
+def test_site_release_includes_text_pages_but_rejects_binary_assets(tmp_path):
+    root = source_tree(tmp_path / "source")
+    for rel, content in (
+        ("site/index.html", "<html lang='en'></html>\n"),
+        ("site/ko/index.html", "<html lang='ko'></html>\n"),
+        ("site/assets/styles.css", "body { color: black; }\n"),
+        ("site/assets/mark.svg", "<svg xmlns='http://www.w3.org/2000/svg'/>\n"),
+    ):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    files = package.allowed_files(root)
+    archive = package.build(root, tmp_path / "output", files)
+    with tarfile.open(archive, "r:gz") as handle:
+        names = {member.name for member in handle.getmembers()}
+    assert {f"comic-translator-2.3.4/{rel}" for rel in (
+        "site/index.html", "site/ko/index.html", "site/assets/styles.css", "site/assets/mark.svg",
+    )} <= names
+
+    (root / "site/assets/mark.svg").write_bytes(b"\x00private image bytes")
+    with pytest.raises(package.PackageError, match="Binary content"):
+        package.allowed_files(root)
+    (root / "site/assets/mark.svg").write_text("<svg/>")
+
+    (root / "site/assets/secret.svg").write_text("<svg/>")
+    with pytest.raises(package.PackageError, match="Sensitive filename"):
+        package.allowed_files(root)
+
+
 def test_existing_temp_name_symlink_does_not_redirect_archive_writes(tmp_path):
     root = source_tree(tmp_path / "source")
     output = tmp_path / "output"

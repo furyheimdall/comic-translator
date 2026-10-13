@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="430" viewBox="0 0 940 430" role="img" aria-labelledby="title desc">
+  <title id="title">One manga dialogue, before and after translation</title>
+  <desc id="desc">Two identical drawn manga scenes. The left speech bubble says 先輩、まだいたんですか？; the right one says 선배, 아직 계셨어요?</desc>
+  <defs>
+    <pattern id="grain" width="8" height="8" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".6" fill="#958b7f" opacity=".22"/></pattern>
+    <g id="scene" fill="none" stroke="#3f3b36" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M0 210 135 178M440 199 314 176M0 280h440M36 280l-36 35m169-35-39 35m191-35 39 35" opacity=".4"/>
+      <rect x="26" y="137" width="83" height="77" rx="2" fill="#e9e3d8"/>
+      <path d="M26 178h83m-42-41v77m-30-37 14-32m40 34 8-23" stroke-width="1.8"/>
+      <path d="M0 240h172l36 40H0m8-44 45-53 72-3 32 56m-88-54 20 40m-18-33-30 39" fill="#d8cec0"/>
+      <path d="M17 279v37m166-36v36M74 218l24-16m-33 12 28 7"/>
+      <path d="M321 278v-88m-10 0h85v90m-85-71h85m-70-18 16-42 34-3 20 45" fill="#d2c5b2"/>
+      <path d="M316 196c0-17 11-34 27-41l6 13 20-9 9 11c11 5 13 17 13 26" fill="#a7a097"/>
+      <path d="M326 191q-7 7-7 21l11 24 2 42h49l-2-42 11-24q-2-17-13-24" fill="#eee8dd"/>
+      <path d="M340 191c-1 9 3 17 13 20 10-2 15-9 15-19m-36 17 10 10m30-10-10 10"/>
+      <path d="M260 281v-65l8-35 39-6 12 39 8 67" fill="#b0a69c"/>
+      <path d="M270 183q3-29 28-29c19 0 25 24 15 35m-42-7 4 26 29 2 11-26" fill="#eee8dd"/>
+      <path d="M276 171q7-23 27-15 13 6 12 24c-10-10-16-11-21-10l-17 15m20 4 4 1m-22-1 4 1" fill="#7a7267"/>
+      <path d="M292 209v28m-30 40h70m-99 0h166m-166 5h166"/>
+      <path d="M0 319h440" stroke="#b6a795" stroke-width="1"/>
+    </g>
+  </defs>
+  <rect width="940" height="430" rx="10" fill="#e9e1d2"/>
+  <rect width="940" height="430" rx="10" fill="url(#grain)"/>
+  <text x="29" y="34" fill="#4b433b" font-family="system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1.6">ORIGINAL · 日本語</text>
+  <text x="493" y="34" fill="#754023" font-family="system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1.6">TRANSLATED · 한국어</text>
+  <rect x="20" y="62" width="440" height="320" rx="3" fill="#f7f4eb" stroke="#544e45" stroke-width="2"/>
+  <rect x="480" y="62" width="440" height="320" rx="3" fill="#f7f4eb" stroke="#544e45" stroke-width="2"/>
+  <use href="#scene" x="20" y="62"/>
+  <use href="#scene" x="480" y="62"/>
+  <path d="M71 95h332q22 0 22 22v74q0 21-22 21H251l-43 32 9-32H71q-21 0-21-21v-74q0-22 21-22Z" fill="#fffdf8" stroke="#3f3b36" stroke-width="2.5"/>
+  <path d="M531 95h332q22 0 22 22v74q0 21-22 21H711l-43 32 9-32H531q-21 0-21-21v-74q0-22 21-22Z" fill="#fffdf8" stroke="#3f3b36" stroke-width="2.5"/>
+  <text x="234" y="163" text-anchor="middle" fill="#242220" font-family="'Noto Sans CJK JP', 'Yu Gothic', system-ui, sans-serif" font-size="24" font-weight="700">先輩、まだいたんですか？</text>
+  <text x="694" y="163" text-anchor="middle" fill="#242220" font-family="'Noto Sans CJK KR', 'Malgun Gothic', system-ui, sans-serif" font-size="28" font-weight="700">선배, 아직 계셨어요?</text>
+  <text x="470" y="410" text-anchor="middle" fill="#625a51" font-family="system-ui, sans-serif" font-size="13">SAME SCENE · SAME LINE</text>
+</svg>
