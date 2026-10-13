@@ -58,8 +58,8 @@ def test_archive_contains_only_allowlisted_source_with_portable_metadata(tmp_pat
 def test_site_release_includes_text_pages_but_rejects_binary_assets(tmp_path):
     root = source_tree(tmp_path / "source")
     for rel, content in (
-        ("site/index.html", "<html lang='en'></html>\n"),
-        ("site/ko/index.html", "<html lang='ko'></html>\n"),
+        ("site/index.html", "<html lang='ko'></html>\n"),
+        ("site/ko/index.html", "<meta http-equiv='refresh' content='0; url=../'>\n"),
         ("site/assets/styles.css", "body { color: black; }\n"),
         ("site/assets/mark.svg", "<svg xmlns='http://www.w3.org/2000/svg'/>\n"),
     ):
