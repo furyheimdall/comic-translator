@@ -85,6 +85,19 @@ h1 em { color: var(--accent); font-style: normal; }
 .install-panel { min-width: 0; padding: clamp(18px, 3vw, 28px); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .install-panel pre { max-width: 100%; overflow-x: auto; margin: 19px 0; padding: 19px; border-radius: 7px; background: #10110f; color: #f6e5d2; font-size: .81rem; line-height: 1.75; }
 .install-panel > p:last-child { margin: 0; color: var(--muted); font-size: .93rem; }
+.hardware { margin-top: clamp(55px, 7vw, 90px); }
+.hardware h3 { max-width: 24ch; margin: 14px 0 15px; font-size: clamp(1.7rem, 3vw, 2.55rem); line-height: 1.2; letter-spacing: -.04em; }
+.hardware > p:not(.kicker) { max-width: 86ch; color: var(--muted); }
+.table-scroll { margin-top: 25px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.spec-table { width: 100%; min-width: 590px; border-collapse: collapse; text-align: left; font-variant-numeric: tabular-nums; }
+.spec-table caption { padding: 17px 20px; background: var(--surface); color: var(--text); text-align: left; font-weight: 650; }
+.spec-table th, .spec-table td { padding: 14px 20px; border-top: 1px solid var(--line); }
+.spec-table thead { background: var(--raised); color: var(--text); font-size: .85rem; }
+.spec-table tbody th { color: var(--text); font-weight: 600; }
+.spec-table tbody td { color: var(--muted); }
+.spec-table tbody tr:nth-child(odd) { background: #ffffff07; }
+.hardware .hardware-note { margin: 18px 0 0; font-size: .92rem; }
+.hardware .hardware-measured { margin: 25px 0 0; padding: 18px 22px; border-left: 3px solid var(--accent); background: #ffb38012; font-size: .94rem; }
 .download-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .download-card { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; padding: clamp(21px, 3vw, 32px); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .download-card .card-type { margin-bottom: 7px; }
@@ -109,6 +122,12 @@ h1 em { color: var(--accent); font-style: normal; }
   .hero { padding-top: 58px; }
   .comparison figcaption { display: block; }
   .comparison .label { display: inline-block; margin-right: 8px; }
+  .spec-table { min-width: 0; table-layout: fixed; font-size: .8rem; }
+  .spec-table th, .spec-table td { padding: 11px 6px; overflow-wrap: anywhere; }
+  .spec-table th:nth-child(1) { width: 27%; }
+  .spec-table th:nth-child(2) { width: 32%; }
+  .spec-table th:nth-child(3) { width: 20%; }
+  .spec-table th:nth-child(4) { width: 21%; }
   .section { padding-block: 74px; }
 }
 @media (max-width: 440px) {

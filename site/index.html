@@ -43,7 +43,7 @@
         <h1 id="hero-title">Japanese manga, <em>lettered in Korean.</em></h1>
         <p class="lead">Upload pages to your own server or read a web chapter with the companion Chrome extension. The server detects Japanese text, removes it, translates the dialogue and places Korean text on the image.</p>
         <div class="actions"><a class="button primary" href="#install">Set up the server</a><a class="button secondary" href="#extension">Use the extension</a></div>
-        <p class="hero-note">Linux source install · GPU engine and models downloaded separately · An LLM provider or a running local LLM is required.</p>
+        <p class="hero-note">Linux source install · GPU engine and models downloaded separately · An LLM provider or a running local LLM is required · <a href="#hardware">Memory requirements</a></p>
       </div>
       <figure class="comparison">
         <img src="assets/comparison.svg" width="940" height="430" alt="Concept drawing of the same manga scene twice: the left panel has the Japanese line ‘先輩、まだいたんですか？’; the right panel replaces that line with ‘선배, 아직 계셨어요?’ in a speech bubble.">
@@ -88,6 +88,25 @@
 cd comic-translator
 python3 scripts/install.py --engine koharu
 systemctl --user start comic-translator</code></pre><p>Open the server web UI, prepare the chosen model, and connect your LLM provider before sending pages. For other machines on your LAN, follow the password-protected LAN installation instructions instead.</p></div>
+      </div>
+      <div class="container hardware" id="hardware" aria-labelledby="hardware-title">
+        <p class="kicker">Memory planning</p>
+        <h3 id="hardware-title">The installer minimum is not your working headroom.</h3>
+        <p>The installer checks <strong>currently available memory</strong> before installing an engine. The recommended figures below are planning allowances for the default models, not measured guarantees that every GPU and model combination will run.</p>
+        <div class="table-scroll">
+          <table class="spec-table">
+            <caption>Available memory by engine (GiB)</caption>
+            <thead><tr><th scope="col">GPU memory</th><th scope="col">Engine</th><th scope="col">Install minimum free</th><th scope="col">Recommended free</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Dedicated VRAM</th><td>Koharu</td><td>8</td><td>16</td></tr>
+              <tr><th scope="row">Dedicated VRAM</th><td><abbr title="MangaTranslator">MT</abbr> / both</td><td>16</td><td>24</td></tr>
+              <tr><th scope="row">GB10/GH200 unified memory</th><td>Koharu</td><td>12</td><td>24</td></tr>
+              <tr><th scope="row">GB10/GH200 unified memory</th><td><abbr title="MangaTranslator">MT</abbr> / both</td><td>24</td><td>32</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hardware-note"><abbr title="MangaTranslator">MT</abbr> means MangaTranslator. Dedicated VRAM means free space on <em>one GPU</em>; unified memory means the CPU/GPU-shared system's <code>MemAvailable</code>. You cannot pool separate GPUs' VRAM or add host RAM to a dedicated GPU's VRAM. Budget separately for a local LLM or optional FLUX models.</p>
+        <p class="hardware-measured"><strong>On the actual server.</strong> Translation has been checked on a DGX Spark (GB10) with 128 GB of unified memory. One completed Koharu job coincided with a roughly 10 GiB change in available system memory. On 2026-10-13, with the translator stopped, a local LLM process used about 93.7 GiB of GPU memory; system available memory was about 14.6 GiB and swap usage about 8.9 GiB. This was <em>not</em> a simultaneous LLM-and-translation measurement. It clears Koharu's 12 GiB installation minimum but misses the 24 GiB recommended headroom. Use an external LLM or a smaller local model to leave more room.</p>
       </div>
     </section>
 
