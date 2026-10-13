@@ -3,7 +3,7 @@
 일본어 만화 원고의 글자를 검출하고, LLM으로 한국어로 번역한 뒤 원문을 지우고 다시 식자하는 개인용 웹 서비스입니다.
 
 **저장소:** <https://github.com/furyheimdall/comic-translator>
-**소개 페이지:** <https://furyheimdall.github.io/comic-translator/ko/>
+**소개 페이지:** <https://furyheimdall.github.io/comic-translator/>
 
 이 배포물은 **Linux 소스 설치 패키지**입니다. 웹 앱·설치기·엔진 연동 코드가 포함되며, GPU 엔진·모델·폰트는 선택한 설치 과정에서 별도로 받습니다. 독립 실행 바이너리, Docker 이미지, 모델이 포함된 오프라인 패키지 또는 Python wheel 배포물이 아닙니다.
 
@@ -43,7 +43,7 @@ uv와 rustup은 위 공식 설치 문서를 따라 준비하세요. 설치기는
 
 설치 전 최소 **가용량** 기준: 전용 VRAM은 Koharu 8 GiB / MangaTranslator 또는 둘 다 16 GiB, **GB10·GH200으로 식별된 통합메모리 GPU**는 Koharu 12 GiB / MangaTranslator 또는 둘 다 24 GiB입니다. 각 엔진은 별도 작업 프로세스로 순차 실행되므로 두 엔진의 사용량을 합산하지 않습니다. 여러 전용 GPU의 여유 VRAM은 합산하지 않고 한 GPU가 기준을 충족해야 합니다. 통합 GPU에서는 `nvidia-smi`가 VRAM 수치를 제공하지 않으므로 `/proc/meminfo`의 `MemAvailable`을 확인합니다. 이 값은 모델별 최대 요구량이 아니라 **기본 구성 설치를 시도하기 위한 보수적인 문턱값**입니다. 동시 LLM, FLUX 9B 같은 추가 옵션과 이후 메모리 사용 변화는 별도로 고려해야 합니다.
 
-기본 모델을 쓸 때 **작업 전에 확보해 둘 권장 여유량**은 전용 GPU 한 장의 VRAM 기준 Koharu 16 GiB / MangaTranslator 또는 둘 다 24 GiB, GB10·GH200 통합메모리의 `MemAvailable` 기준 Koharu 24 GiB / MangaTranslator 또는 둘 다 32 GiB입니다. 설치기가 검사하는 최소치보다 여유를 둔 계획값이며 다른 GPU나 추가 모델에서의 성공을 보증하는 실측 요구량은 아닙니다. 로컬 LLM은 해당 모델의 메모리 사용량을 별도로 더해 계획하세요. [소개 페이지의 메모리 표](https://furyheimdall.github.io/comic-translator/ko/#hardware)에서 설치 최소치와 권장 여유를 함께 볼 수 있습니다.
+기본 모델을 쓸 때 **작업 전에 확보해 둘 권장 여유량**은 전용 GPU 한 장의 VRAM 기준 Koharu 16 GiB / MangaTranslator 또는 둘 다 24 GiB, GB10·GH200 통합메모리의 `MemAvailable` 기준 Koharu 24 GiB / MangaTranslator 또는 둘 다 32 GiB입니다. 설치기가 검사하는 최소치보다 여유를 둔 계획값이며 다른 GPU나 추가 모델에서의 성공을 보증하는 실측 요구량은 아닙니다. 로컬 LLM은 해당 모델의 메모리 사용량을 별도로 더해 계획하세요. [소개 페이지의 메모리 표](https://furyheimdall.github.io/comic-translator/#hardware)에서 설치 최소치와 권장 여유를 함께 볼 수 있습니다.
 
 실제 검증 장비는 **128 GB 통합메모리의 DGX Spark(GB10)**입니다. 완료된 Koharu 작업에서 가용 메모리 약 10 GiB 변동이 관찰됐지만 이는 작업의 최대 메모리 요구량 실측은 아닙니다. 2026-10-13에는 번역 서비스를 실행하지 않은 상태에서 로컬 LLM만 GPU 메모리 약 93.7 GiB를 사용했고 시스템 가용량은 약 14.6 GiB, 스왑 사용량은 약 8.9 GiB였습니다. 로컬 LLM과 번역을 동시에 돌린 값이 아니며, 당시 여유량은 Koharu 설치 최소치 12 GiB를 넘지만 위 권장치 24 GiB에는 못 미쳤습니다.
 
@@ -169,7 +169,7 @@ MangaTranslator의 말풍선 밖 텍스트 감지 모델은 Hugging Face의 별�
 
 ## 브라우저 확장 실시간 번역
 
-별도 저장소의 Chrome 확장 프로그램 [comic-translator-extension](https://github.com/furyheimdall/comic-translator-extension)이 웹 페이지에 로딩된 만화 이미지를 이 서버로 보내고, 번역된 이미지로 바꿔 표시합니다. 설치 파일과 설치 방법은 그 저장소의 [Releases](https://github.com/furyheimdall/comic-translator-extension/releases)와 README에 있습니다. 서버 v0.4.0 이상에는 확장 1.1.0 이상이 필요합니다. [소개 페이지의 연동 순서](https://furyheimdall.github.io/comic-translator/ko/#extension)도 참고할 수 있습니다.
+별도 저장소의 Chrome 확장 프로그램 [comic-translator-extension](https://github.com/furyheimdall/comic-translator-extension)이 웹 페이지에 로딩된 만화 이미지를 이 서버로 보내고, 번역된 이미지로 바꿔 표시합니다. 설치 파일과 설치 방법은 그 저장소의 [Releases](https://github.com/furyheimdall/comic-translator-extension/releases)와 README에 있습니다. 서버 v0.4.0 이상에는 확장 1.1.0 이상이 필요합니다. [소개 페이지의 연동 순서](https://furyheimdall.github.io/comic-translator/#extension)도 참고할 수 있습니다.
 
 1. 확장 프로그램 팝업의 **설정 열기**에서 서버 주소를 넣고 **페어링 요청**을 누릅니다. 설정 화면에 6자리 코드가 표시됩니다.
 2. 서버 웹 UI의 **확장 프로그램** 화면에 같은 코드의 **연결 요청**이 나타나면 코드를 대조한 뒤 **승인**합니다. 요청은 5분 뒤 만료되고, 동시에 대기할 수 있는 요청은 5개입니다.

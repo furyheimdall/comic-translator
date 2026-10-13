@@ -38,9 +38,8 @@ pre code { background: none; padding: 0; font-size: inherit; }
 .brand:hover { color: var(--text); }
 .brand img { flex: none; width: 36px; height: 36px; }
 .site-nav { display: flex; align-items: center; gap: 5px; margin-left: auto; }
-.site-nav a, .lang-switch { display: inline-flex; align-items: center; min-height: 44px; border-radius: 6px; padding: 7px 10px; color: var(--muted); text-decoration: none; white-space: nowrap; font-size: .88rem; font-weight: 550; }
-.site-nav a:hover, .lang-switch:hover { background: var(--surface); color: var(--text); }
-.lang-switch { flex: none; color: var(--accent); border: 1px solid var(--line); padding-inline: 13px; }
+.site-nav a { display: inline-flex; align-items: center; min-height: 44px; border-radius: 6px; padding: 7px 10px; color: var(--muted); text-decoration: none; white-space: nowrap; font-size: .88rem; font-weight: 550; }
+.site-nav a:hover { background: var(--surface); color: var(--text); }
 
 .hero { padding-top: clamp(72px, 10vw, 130px); padding-bottom: clamp(78px, 9vw, 110px); }
 .hero-copy { max-width: 860px; }
@@ -111,7 +110,7 @@ h1 em { color: var(--accent); font-style: normal; }
   .header-inner { flex-wrap: wrap; gap: 0 16px; padding-top: 7px; }
   .site-nav { order: 3; flex-basis: 100%; margin-left: 0; overflow-x: auto; scrollbar-width: thin; }
   .site-nav a:first-child { padding-left: 0; }
-  .lang-switch { margin-left: auto; }
+
 }
 @media (max-width: 720px) {
   html { scroll-padding-top: 165px; }
@@ -134,7 +133,7 @@ h1 em { color: var(--accent); font-style: normal; }
   :root { --gutter: 18px; }
   .brand { font-size: .88rem; }
   .brand img { width: 30px; height: 30px; }
-  .lang-switch { padding-inline: 9px; }
+
   .version { margin: 8px 0 0; }
   h1 { font-size: clamp(2.55rem, 12vw, 3.1rem); }
   .actions .button { flex: 1 1 auto; }
