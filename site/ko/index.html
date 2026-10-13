@@ -43,7 +43,7 @@
         <h1 id="hero-title">일본어 만화를<br><em>한국어로 다시 식자합니다.</em></h1>
         <p class="lead">원고를 업로드해 한 장씩 확인하거나, Chrome 확장으로 웹페이지에서 바로 읽을 수 있습니다. 서버가 일본어 글자를 찾아 지우고 대사를 번역한 뒤 한국어를 이미지에 조판합니다.</p>
         <div class="actions"><a class="button primary" href="#install">서버 설치하기</a><a class="button secondary" href="#extension">확장 프로그램 연동</a></div>
-        <p class="hero-note">Linux 소스 설치 · GPU 엔진과 모델은 별도 준비 · LLM 제공자 또는 실행 중인 로컬 LLM 필요</p>
+        <p class="hero-note">Linux 소스 설치 · GPU 엔진과 모델은 별도 준비 · LLM 제공자 또는 실행 중인 로컬 LLM 필요 · <a href="#hardware">메모리 권장 사양</a></p>
       </div>
       <figure class="comparison">
         <img src="../assets/comparison.svg" width="940" height="430" alt="같은 만화 장면을 두 번 그린 개념도. 왼쪽 말풍선에는 일본어 대사 ‘先輩、まだいたんですか？’, 오른쪽 말풍선에는 그 대사의 한국어 번역 ‘선배, 아직 계셨어요?’가 들어 있다.">
@@ -83,6 +83,25 @@
 cd comic-translator
 python3 scripts/install.py --engine koharu
 systemctl --user start comic-translator</code></pre><p>서버 웹 UI에서 사용할 모델을 준비하고 LLM 제공자를 연결한 뒤 원고를 올리세요. 다른 기기에서 접속하려면 로그인 비밀번호가 필요한 LAN 설치 방법을 따르세요.</p></div>
+      </div>
+      <div class="container hardware" id="hardware" aria-labelledby="hardware-title">
+        <p class="kicker">메모리 사양</p>
+        <h3 id="hardware-title">설치 최소치와 작업 여유를 따로 보세요.</h3>
+        <p>설치기는 설치 직전의 <strong>가용 메모리</strong>를 검사합니다. 권장치는 기본 모델 작업에 여유를 두기 위한 계획값으로, 모든 GPU와 모델에서 번역이 성공한다는 실측 보증은 아닙니다.</p>
+        <div class="table-scroll">
+          <table class="spec-table">
+            <caption>엔진별 현재 가용 메모리 기준 (GiB)</caption>
+            <thead><tr><th scope="col">GPU 메모리</th><th scope="col">엔진</th><th scope="col">설치 최소 여유</th><th scope="col">권장 확보 여유</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">전용 VRAM</th><td>Koharu</td><td>8</td><td>16</td></tr>
+              <tr><th scope="row">전용 VRAM</th><td><abbr title="MangaTranslator">MT</abbr> / 둘 다</td><td>16</td><td>24</td></tr>
+              <tr><th scope="row">GB10·GH200 통합메모리</th><td>Koharu</td><td>12</td><td>24</td></tr>
+              <tr><th scope="row">GB10·GH200 통합메모리</th><td><abbr title="MangaTranslator">MT</abbr> / 둘 다</td><td>24</td><td>32</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hardware-note"><abbr title="MangaTranslator">MT</abbr>는 MangaTranslator입니다. 전용 VRAM은 <em>GPU 한 장</em>의 여유량이며, 통합메모리는 CPU·GPU가 공유하는 시스템의 <code>MemAvailable</code>입니다. 여러 전용 GPU의 VRAM을 합산하거나 전용 VRAM에 시스템 RAM을 더하지 않습니다. 로컬 LLM이나 추가 FLUX 모델을 함께 쓰면 그 모델의 사용량도 별도로 확보해야 합니다.</p>
+        <p class="hardware-measured"><strong>실제 운영 서버.</strong> 확인된 번역 장비는 128 GB 통합메모리의 DGX Spark(GB10)입니다. 완료된 Koharu 작업에서 가용 메모리 약 10 GiB 변동이 관찰됐습니다. 2026-10-13에는 번역 서비스를 실행하지 않은 상태에서 로컬 LLM이 GPU 메모리 약 93.7 GiB를 사용했고 시스템 가용량은 약 14.6 GiB, 스왑 사용량은 약 8.9 GiB였습니다. 이 수치는 LLM과 번역을 동시에 실행한 사용량이 아닙니다. 현재 LLM을 그대로 둔다면 Koharu의 설치 최소치 12 GiB는 넘지만 권장 여유 24 GiB에는 못 미치므로, 외부 LLM이나 더 작은 로컬 모델로 여유를 확보하는 편이 안전합니다.</p>
       </div>
     </section>
 
