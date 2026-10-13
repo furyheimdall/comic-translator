@@ -31,6 +31,9 @@ EXACT = REQUIRED
 SOURCE_DIRS = {
     "app": frozenset({".py"}),
     "web": frozenset({".html", ".js", ".css"}),
+    "site": frozenset({".html"}),
+    "site/ko": frozenset({".html"}),
+    "site/assets": frozenset({".css", ".svg"}),
     "scripts": frozenset({".py", ".sh"}),
     "tests": frozenset({".py"}),
     "tests/fixtures": frozenset({".py"}),

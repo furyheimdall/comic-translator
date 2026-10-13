@@ -3,6 +3,7 @@
 일본어 만화 원고의 글자를 검출하고, LLM으로 한국어로 번역한 뒤 원문을 지우고 다시 식자하는 개인용 웹 서비스입니다.
 
 **저장소:** <https://github.com/furyheimdall/comic-translator>
+**소개 페이지:** <https://furyheimdall.github.io/comic-translator/ko/>
 
 이 배포물은 **Linux 소스 설치 패키지**입니다. 웹 앱·설치기·엔진 연동 코드가 포함되며, GPU 엔진·모델·폰트는 선택한 설치 과정에서 별도로 받습니다. 독립 실행 바이너리, Docker 이미지, 모델이 포함된 오프라인 패키지 또는 Python wheel 배포물이 아닙니다.
 
@@ -164,9 +165,9 @@ MangaTranslator의 말풍선 밖 텍스트 감지 모델은 Hugging Face의 별�
 
 ## 브라우저 확장 실시간 번역
 
-별도 저장소의 Chrome 확장 프로그램 [comic-translator-extension](https://github.com/furyheimdall/comic-translator-extension)이 웹 페이지에 로딩된 만화 이미지를 이 서버로 보내고, 번역된 이미지로 바꿔 표시합니다. 설치 파일과 설치 방법은 그 저장소의 [Releases](https://github.com/furyheimdall/comic-translator-extension/releases)와 README에 있습니다. 서버 v0.4.0 이상에는 확장 1.1.0 이상이 필요합니다.
+별도 저장소의 Chrome 확장 프로그램 [comic-translator-extension](https://github.com/furyheimdall/comic-translator-extension)이 웹 페이지에 로딩된 만화 이미지를 이 서버로 보내고, 번역된 이미지로 바꿔 표시합니다. 설치 파일과 설치 방법은 그 저장소의 [Releases](https://github.com/furyheimdall/comic-translator-extension/releases)와 README에 있습니다. 서버 v0.4.0 이상에는 확장 1.1.0 이상이 필요합니다. [소개 페이지의 연동 순서](https://furyheimdall.github.io/comic-translator/ko/#extension)도 참고할 수 있습니다.
 
-1. 확장 프로그램 팝업에 서버 주소를 넣고 **페어링 요청**을 누릅니다. 팝업에 6자리 코드가 표시됩니다.
+1. 확장 프로그램 팝업의 **설정 열기**에서 서버 주소를 넣고 **페어링 요청**을 누릅니다. 설정 화면에 6자리 코드가 표시됩니다.
 2. 서버 웹 UI의 **확장 프로그램** 화면에 같은 코드의 **연결 요청**이 나타나면 코드를 대조한 뒤 **승인**합니다. 요청은 5분 뒤 만료되고, 동시에 대기할 수 있는 요청은 5개입니다.
 3. 승인되면 확장 프로그램이 기기 토큰을 자동으로 받아 저장합니다. 토큰은 요청을 시작한 확장에게 한 번만 전달되며, 서버에는 해시만 저장됩니다. 사람이 토큰을 복사할 필요가 없습니다.
 4. 확장 프로그램에서 LLM 제공자·모델·추론 수준을 고릅니다.
