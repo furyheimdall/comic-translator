@@ -62,7 +62,7 @@ h1 em { color: var(--accent); font-style: normal; }
 .comparison figcaption { display: flex; align-items: baseline; gap: 12px; padding: 15px 3px 3px; color: var(--muted); font-size: .88rem; }
 .label { flex: none; padding: 3px 8px; border: 1px solid #ffb38055; border-radius: 4px; color: var(--accent); font-size: .71rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
 
-.section { padding-block: clamp(78px, 10vw, 120px); border-top: 1px solid var(--line); scroll-margin-top: 104px; }
+.section { padding-block: clamp(78px, 10vw, 120px); border-top: 1px solid var(--line); }
 .section-tint { background: #1c1d19; }
 .split { display: grid; grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); gap: clamp(36px, 7vw, 100px); align-items: start; }
 .section-heading h2 { max-width: 18ch; margin: 16px 0 20px; font-size: clamp(2rem, 4vw, 3.35rem); line-height: 1.17; letter-spacing: -.05em; }
@@ -104,7 +104,6 @@ h1 em { color: var(--accent); font-style: normal; }
   html { scroll-padding-top: 165px; }
   .site-nav { flex-wrap: wrap; overflow-x: visible; gap: 2px; }
   .site-nav a { padding-inline: 4px; }
-  .section { scroll-margin-top: 165px; }
   .split, .download-grid, .steps { grid-template-columns: minmax(0, 1fr); }
   .steps li:last-child { grid-column: auto; }
   .hero { padding-top: 58px; }
