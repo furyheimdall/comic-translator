@@ -2,6 +2,14 @@
 
 **Read Japanese manga in Korean — on your own GPU.** comic-translator detects text, translates it with the LLM you choose, erases the original and re-letters the page in Korean.
 
+- Detects Japanese text on the manga page.
+- Translates that text with the LLM you choose.
+- Erases the original lettering and typesets the Korean translation on your own GPU.
+
+![Before and after: the same drawn scene, with Japanese dialogue on the left and Korean on the right](site/assets/comparison.svg)
+
+개념도입니다. 소개 페이지와 같은 `site/assets/comparison.svg`이며, 같은 장면·같은 대사를 기준으로 그렸습니다. 실제 앱 화면을 캡처한 이미지는 아닙니다.
+
 일본어 만화 원고의 글자를 검출하고, LLM으로 한국어로 번역한 뒤 원문을 지우고 다시 식자하는 개인용 웹 서비스입니다.
 
 **저장소:** <https://github.com/furyheimdall/comic-translator>
