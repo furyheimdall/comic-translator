@@ -6,7 +6,9 @@ from fastapi.testclient import TestClient
 
 from app import pairing as pairing_module
 from app.db import Database
+from app.engines import KoharuEngine
 from app.main import create_app
+from app.model_setup import ModelSetup
 from app.settings import load_settings
 
 
@@ -150,3 +152,37 @@ def test_server_without_password_needs_no_pairing(tmp_path):
     with TestClient(create_app(settings)) as client:
         assert client.post("/api/pair/start", json={"name": "x"}).status_code == 400
         assert client.get("/api/session").json()["authenticated"] is True
+
+
+def test_single_priority_api_preserves_device_ownership_and_normal_default(server, monkeypatch):
+    client, tmp_path = server
+    monkeypatch.setattr(KoharuEngine, "availability", lambda _self: (True, ""))
+    monkeypatch.setattr(ModelSetup, "require_prepared_for_new_job", lambda _self, _options: None)
+    owner = pair(client, "owner")
+    other = pair(client, "other")
+    db = Database(tmp_path / "app.db")
+    try:
+        db.upsert_provider({
+            "id": "p", "name": "local", "kind": "openai_compatible", "auth": "none",
+            "base_url": "http://unused", "model": "default", "vision": 0,
+            "secret": None, "account": None, "created_at": time.time(),
+        })
+        payload = {"provider_id": "p"}
+        normal = client.post("/api/live", json=payload, headers=bearer(owner))
+        assert normal.status_code == 200
+        assert normal.json()["priority"] == "normal"
+        selected = client.post("/api/live", json={**payload, "priority": "single"}, headers=bearer(owner))
+        assert selected.status_code == 200
+        single = selected.json()
+        assert single["priority"] == "single" and single["id"] != normal.json()["id"]
+        again = client.post("/api/live", json={**payload, "priority": "single"}, headers=bearer(owner))
+        assert again.json()["id"] == single["id"]
+        assert client.get(f"/api/live/{single['id']}", headers=bearer(other)).status_code == 403
+        other_single = client.post("/api/live", json={**payload, "priority": "single"}, headers=bearer(other))
+        assert other_single.status_code == 200 and other_single.json()["id"] != single["id"]
+        assert db.get_job(single["id"])["device_id"] != db.get_job(other_single.json()["id"])["device_id"]
+        for invalid in ("urgent", None, [], {}):
+            response = client.post("/api/live", json={**payload, "priority": invalid}, headers=bearer(owner))
+            assert response.status_code == 400
+    finally:
+        db._conn.close()

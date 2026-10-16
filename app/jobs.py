@@ -167,6 +167,10 @@ class JobManager:
         self._current: tuple[str, Engine] | None = None
         # Input folder and run of the live session the engine is watching now.
         self._live: tuple[Path, EngineRun] | None = None
+        # Admission is the start boundary: never remove a page the watcher may have selected.
+        self._live_page: str | None = None
+        self._live_release = False
+        self._live_closing = False
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._loop, name="job-worker", daemon=True)
 
@@ -242,13 +246,16 @@ class JobManager:
     # live sessions (browser extension) -------------------------------------------
     def open_live(
         self, *, engine_id: str, provider_id: str, options: dict[str, Any], instructions: str, title: str,
-        llm: dict[str, str] | None = None, device_id: str | None = None,
+        llm: dict[str, str] | None = None, device_id: str | None = None, priority: str = "normal",
     ) -> str:
         """Reuse today's live session for the same device and settings, so the engine stays warm across tabs.
 
         `llm` holds the session's model / reasoning-level choice ({} = provider defaults).
         `device_id` is the paired device that owns the session; None is the logged-in web session.
+        `priority` separates explicit single-image requests from ordinary website work.
         """
+        if priority not in ("normal", "single"):
+            raise IngestError("priority 는 normal 또는 single 이어야 합니다.")
         engine = self.engines.get(engine_id)
         if not engine:
             raise IngestError(f"알 수 없는 엔진: {engine_id}")
@@ -262,7 +269,7 @@ class JobManager:
         with self._lock:
             existing = self.db.find_live_job(
                 engine_id, provider_id, json.dumps(resolved), instructions, json.dumps(llm or {}, sort_keys=True), today,
-                device_id,
+                device_id, priority,
             )
             if existing:
                 return existing["id"]
@@ -281,6 +288,7 @@ class JobManager:
                     "live": 1,
                     "llm": llm or {},
                     "device_id": device_id,
+                    "priority": priority,
                     "created_at": time.time(),
                 },
                 [],
@@ -314,39 +322,75 @@ class JobManager:
             page = {"job_id": job_id, "idx": idx, "source_name": name[:500], "file": file, "sha256": digest, "output": output}
             self.db.add_page(page)
             if output is None:
-                if self._current and self._current[0] == job_id:
-                    # Running: link into the watched folder. Outside that window
-                    # the page is listed at start or requeued by _finish_live.
+                if self._current and self._current[0] == job_id and job["status"] == "running":
+                    # Feed at most one page, even before its start event reaches Python.
                     if self._live:
-                        (self._live[0] / file).symlink_to(self.input_path(job_id, page).resolve())
+                        self._feed_live()
                 else:
-                    # Another session's engine may be idling in watch mode; let it exit now.
-                    self._release_idle_live()
                     if job["status"] != "queued":
                         self.db.set_job_status(job_id, "queued", message="대기 중", error=None)
-                        self._wake.set()
+                    self._release_idle_live()
+                    self._wake.set()
         return {"idx": idx, "translated": output is not None, "error": None}
 
     def _release_idle_live(self) -> None:
-        """Ask the watching engine to exit once its pending pages are done (caller holds the lock).
-
-        ct_batch only checks the marker when it has nothing left, so queued pages still finish.
-        """
+        """Drain ordinary work, but yield to priority work at the next page boundary."""
         if self._live:
-            (self._live[0] / ".closed").touch()
+            self._live_release = True
+            self._feed_live()
+
+    def _feed_live(self) -> None:
+        """Admit one page under the manager lock; never withdraw an admitted path.
+
+        ct_batch scans ahead of its stdout start event. Exposing only one page
+        prevents that race without modifying or rebuilding the engine binary.
+        """
+        if not self._live or self._live_page is not None or self._live_closing:
+            return
+        input_dir, run = self._live
+        priority = self.db.next_priority_job()
+        if priority and priority["id"] != run.job_id:
+            self._live_closing = True
+        else:
+            pending = next(
+                (page for page in self.db.list_pages(run.job_id) if not page["output"] and not page["error"]),
+                None,
+            )
+            if pending:
+                self._live_page = pending["file"]
+                (input_dir / pending["file"]).symlink_to(self.input_path(run.job_id, pending).resolve())
+                return
+            self._live_closing = self._live_release
+        if self._live_closing:
+            (input_dir / ".closed").touch()
+
+    def _live_page_finished(self, job_id: str, file: str) -> None:
+        with self._lock:
+            if not self._live or self._live[1].job_id != job_id or self._live_page != file:
+                return
+            run = self._live[1]
+            self._collect_outputs(job_id, run.output_dir)
+            page = next(page for page in self.db.list_pages(job_id) if page["file"] == file)
+            if not page["output"]:
+                error = run.failed_files.get(file) or "엔진이 결과 이미지를 만들지 못했습니다."
+                self.db.set_page_error(job_id, page["idx"], error[:500])
+            self._live_page = None
+            self._feed_live()
 
     def discard_live_pages(self, job_id: str, indices: set[int]) -> None:
-        """Drop pages nobody waits for any more, unless the engine already started them."""
+        """Drop pages nobody waits for any more, unless already admitted to the engine."""
         with self._lock:
             live = self._live if self._current and self._current[0] == job_id else None
             for page in self.db.list_pages(job_id):
                 if page["idx"] not in indices or page["output"] or page["error"]:
                     continue
                 if live:
-                    if page["file"] in live[1].started_files:
+                    if page["file"] == self._live_page or page["file"] in live[1].started_files:
                         continue
                     (live[0] / page["file"]).unlink(missing_ok=True)
                 self.db.set_page_error(job_id, page["idx"], "취소됨")
+            if live:
+                self._feed_live()
 
     def cancel(self, job_id: str) -> None:
         job = self.db.get_job(job_id)
@@ -390,6 +434,8 @@ class JobManager:
             # A model/reasoning choice belongs to the old provider.
             llm="{}" if switched else job["llm"],
         )
+        with self._lock:
+            self._release_idle_live()
         self._wake.set()
 
     def delete(self, job_id: str) -> None:
@@ -466,24 +512,31 @@ class JobManager:
                     ),
                     watch_idle_seconds=self.live_idle_seconds if live else None,
                     cache_dir=self.job_dir(job_id) / "private-cache" if not live and job["engine"] in ("koharu", "mangatranslator") else None,
+                    page_finished=(lambda file: self._live_page_finished(job_id, file)) if live else None,
                 )
-                # Under the lock, so a live page added concurrently is either
-                # listed here or linked into input_dir by add_live_page.
+                # Under the lock, so concurrent uploads are listed here or fed
+                # by add_live_page. Live runs expose only one page at a time.
                 with self._lock:
                     pages = self.db.list_pages(job_id)
                     pending = [page for page in pages if not page["output"] and not (live and page["error"])]
-                    for page in pending:
-                        (input_dir / page["file"]).symlink_to(self.input_path(job_id, page).resolve())
                     if live:
                         self._live = (input_dir, run)
+                        self._live_page = None
+                        self._live_release = self.db.next_queued_job() is not None
+                        self._live_closing = False
+                        self._feed_live()
+                    else:
+                        for page in pending:
+                            (input_dir / page["file"]).symlink_to(self.input_path(job_id, page).resolve())
                 if pending and run.cache_dir is not None:
                     self._reuse_cached_pages(job_id, job["engine"], job["options"], run.cache_dir, pending)
                 try:
-                    if pending:
+                    if pending and (not live or not self._live_closing):
                         engine.run(run)
                 finally:
                     with self._lock:
                         self._live = None
+                        self._live_page = None
             done = self._collect_outputs(job_id, output_dir)
             if live:
                 self._finish_live(job_id, run)
