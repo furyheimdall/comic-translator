@@ -91,13 +91,44 @@ def test_device_token_is_limited_to_extension_endpoints(server):
     for method, path in [("GET", "/api/jobs"), ("GET", "/api/devices"), ("GET", "/api/pair/requests"),
                          ("GET", "/api/model-setup"), ("POST", "/api/providers")]:
         assert client.request(method, path, headers=bearer(token)).status_code == 403, path
-    # Page images of batch jobs stay private; live-session pages are readable.
+    # Page images of batch jobs stay private. A live job is readable only by the device that owns it.
     db = Database(tmp_path / "app.db")
     for job_id, live in (("batch", 0), ("live", 1)):
         db.create_job({"id": job_id, "title": "t", "engine": "koharu", "provider_id": "p", "options": {},
                        "instructions": "", "live": live, "created_at": time.time()}, [])
     assert client.get("/api/jobs/batch/pages/1/output", headers=bearer(token)).status_code == 403
-    assert client.get("/api/jobs/live/pages/1/output", headers=bearer(token)).status_code == 404
+    # A live job with no owning device is not this extension's session.
+    assert client.get("/api/jobs/live/pages/1/output", headers=bearer(token)).status_code == 403
+
+
+def test_live_output_requires_the_owning_paired_device(server):
+    client, tmp_path = server
+    owner_token = pair(client, "owner")
+    other_token = pair(client, "other")
+    login(client)
+    devices = {device["name"]: device["id"] for device in client.get("/api/devices").json()}
+    client.cookies.clear()
+    db = Database(tmp_path / "app.db")
+    db.create_job({
+        "id": "owned", "title": "t", "engine": "koharu", "provider_id": "p", "options": {},
+        "instructions": "", "live": 1, "device_id": devices["owner"], "created_at": time.time(),
+    }, [{"job_id": "owned", "idx": 1, "source_name": "page", "file": "0001.png", "sha256": "abc"}])
+    db.set_page_output("owned", 1, "0001.png")
+    output = tmp_path / "jobs" / "owned" / "output"
+    output.mkdir(parents=True)
+    (output / "0001.png").write_bytes(b"translated-png")
+
+    owned = client.get("/api/jobs/owned/pages/1/output", headers=bearer(owner_token))
+    assert owned.status_code == 200 and owned.content == b"translated-png"
+    assert client.get("/api/jobs/owned/pages/1/output", headers=bearer(other_token)).status_code == 403
+    assert client.get("/api/jobs/owned/pages/1/source", headers=bearer(owner_token)).status_code == 403
+    assert client.get("/api/live/owned", headers=bearer(other_token)).status_code == 403
+    assert client.post("/api/live/owned/discard", json={"pages": [1]}, headers=bearer(other_token)).status_code == 403
+    assert client.get("/api/live/owned", headers=bearer(owner_token)).status_code == 200
+
+    login(client)
+    web = client.get("/api/jobs/owned/pages/1/output")
+    assert web.status_code == 200 and web.content == b"translated-png"
 
 
 def test_revoking_or_unpairing_disconnects_the_device(server):

@@ -76,6 +76,16 @@ def test_same_settings_reuse_one_session_and_other_settings_do_not(live):
     assert manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="x", llm=dict(reversed(fast.items()))) == fast_id
 
 
+def test_same_settings_stay_on_the_device_that_opened_them(live):
+    db, _engine, manager, job_id = live
+    owned = manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="x", device_id="dev-a")
+    assert owned != job_id
+    assert db.get_job(owned)["device_id"] == "dev-a"
+    assert manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="again", device_id="dev-a") == owned
+    other = manager.open_live(engine_id="watch", provider_id="p", options={}, instructions="", title="x", device_id="dev-b")
+    assert other != owned and db.get_job(other)["device_id"] == "dev-b"
+
+
 def test_cached_translation_is_not_reused_across_model_choices(live):
     db, _engine, manager, job_id = live
     manager.add_live_page(job_id, "a", image_bytes("red"))
