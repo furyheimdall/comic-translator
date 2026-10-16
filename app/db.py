@@ -66,6 +66,8 @@ MIGRATIONS = (
     ("pages", "sha256", "TEXT"),
     ("pages", "error", "TEXT"),
     ("jobs", "llm", "TEXT NOT NULL DEFAULT '{}'"),
+    # Paired device that opened a live session. NULL is a web session (or a pre-ownership row).
+    ("jobs", "device_id", "TEXT"),
 )
 
 JOB_STATUSES = ("queued", "running", "done", "failed", "cancelled")
@@ -161,9 +163,9 @@ class Database:
             self._conn.execute("BEGIN")
             try:
                 self._conn.execute(
-                    """INSERT INTO jobs (id, title, engine, provider_id, options, instructions, status, message, live, llm, created_at)
-                       VALUES (:id, :title, :engine, :provider_id, :options, :instructions, :status, :message, :live, :llm, :created_at)""",
-                    {"status": "queued", "message": "", "live": 0, **job, "options": json.dumps(job["options"]), "llm": json.dumps(job.get("llm") or {}, sort_keys=True)},
+                    """INSERT INTO jobs (id, title, engine, provider_id, options, instructions, status, message, live, llm, device_id, created_at)
+                       VALUES (:id, :title, :engine, :provider_id, :options, :instructions, :status, :message, :live, :llm, :device_id, :created_at)""",
+                    {"status": "queued", "message": "", "live": 0, "device_id": None, **job, "options": json.dumps(job["options"]), "llm": json.dumps(job.get("llm") or {}, sort_keys=True)},
                 )
                 self._conn.executemany(
                     "INSERT INTO pages (job_id, idx, source_name, file, sha256) VALUES (:job_id, :idx, :source_name, :file, :sha256)",
@@ -184,11 +186,15 @@ class Database:
         # Live (browser extension) sessions wait on a reader, so they go first.
         return self._one("SELECT * FROM jobs WHERE status = 'queued' ORDER BY live DESC, created_at LIMIT 1")
 
-    def find_live_job(self, engine: str, provider_id: str, options: str, instructions: str, llm: str, since: float) -> dict[str, Any] | None:
+    def find_live_job(
+        self, engine: str, provider_id: str, options: str, instructions: str, llm: str, since: float,
+        device_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        # Same settings reuse one session per paired device (or per web session, when device_id is NULL).
         return self._one(
             """SELECT * FROM jobs WHERE live = 1 AND engine = ? AND provider_id = ? AND options = ? AND instructions = ?
-               AND llm = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1""",
-            (engine, provider_id, options, instructions, llm, since),
+               AND llm = ? AND created_at >= ? AND device_id IS ? ORDER BY created_at DESC LIMIT 1""",
+            (engine, provider_id, options, instructions, llm, since, device_id),
         )
 
     def update_job(self, job_id: str, **fields: Any) -> None:

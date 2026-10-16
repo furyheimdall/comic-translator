@@ -1,5 +1,15 @@
 # comic-translator
 
+**Read Japanese manga in Korean — on your own GPU.** comic-translator detects text, translates it with the LLM you choose, erases the original and re-letters the page in Korean.
+
+- Detects Japanese text on the manga page.
+- Translates that text with the LLM you choose.
+- Erases the original lettering and typesets the Korean translation on your own GPU.
+
+![Before and after: the same drawn scene, with Japanese dialogue on the left and Korean on the right](site/assets/comparison.svg)
+
+개념도입니다. 소개 페이지와 같은 `site/assets/comparison.svg`이며, 같은 장면·같은 대사를 기준으로 그렸습니다. 실제 앱 화면을 캡처한 이미지는 아닙니다.
+
 일본어 만화 원고의 글자를 검출하고, LLM으로 한국어로 번역한 뒤 원문을 지우고 다시 식자하는 개인용 웹 서비스입니다.
 
 **저장소:** <https://github.com/furyheimdall/comic-translator>
@@ -179,13 +189,13 @@ MangaTranslator의 말풍선 밖 텍스트 감지 모델은 Hugging Face의 별�
 연결 관리:
 
 - 웹 UI **확장 프로그램 → 연결된 기기**에서 기기별 마지막 사용 시각을 보고 **연결 해제**할 수 있습니다. 해제된 기기는 다음 요청부터 401을 받고, 확장 프로그램은 다시 페어링하라고 안내합니다. 확장 프로그램에서 직접 연결을 해제할 수도 있습니다.
-- 연결된 기기는 확장 프로그램에 필요한 API만 쓸 수 있습니다: 세션·메타·제공자 목록, 제공자별 모델·추론 옵션, 실시간 세션(`/api/live…`), 실시간 작업의 결과 이미지, 자기 연결 해제. 일반 작업, 제공자 설정, 모델 준비, 기기·페어링 관리 등은 403으로 거부합니다.
+- 연결된 기기는 확장 프로그램에 필요한 API만 쓸 수 있습니다: 세션·메타·제공자 목록, 제공자별 모델·추론 옵션, 실시간 세션(`/api/live…`), 그 기기가 연 실시간 작업의 결과 이미지, 자기 연결 해제. 다른 기기의 실시간 작업과 그 결과 이미지, 일반 작업, 제공자 설정, 모델 준비, 기기·페어링 관리 등은 403으로 거부합니다.
 - 비밀번호가 없는 서버(루프백 전용)는 페어링 없이 연결됩니다.
 - HTTP에서는 페어링 과정과 이후 통신이 암호화되지 않습니다. 외부망에서는 VPN이나 HTTPS 역방향 프록시를 쓰세요.
 
 동작 방식:
 
-- 실시간 번역은 **Koharu 엔진만** 지원합니다. 같은 엔진·제공자·옵션·지침의 요청은 **하루 단위로 하나의 ‘웹 실시간 번역’ 작업**에 모이며, 작업 목록에서 결과를 확인·다운로드·삭제할 수 있습니다.
+- 실시간 번역은 **Koharu 엔진만** 지원합니다. 같은 페어링 기기(또는 로그인한 웹 세션)에서 같은 엔진·제공자·옵션·지침으로 보낸 요청은 **하루 단위로 하나의 ‘웹 실시간 번역’ 작업**에 모이며, 작업 목록에서 결과를 확인·다운로드·삭제할 수 있습니다. 다른 페어링 기기는 그 작업의 결과 이미지를 받지 않습니다.
 - 확장 프로그램은 서버에 연결된 제공자를 고른 뒤, 서버가 `/api/providers/{id}/options`로 제공하는 **모델**과 **추론 수준**을 선택합니다. 모델 목록은 제공자의 `/models` 응답(10분 캐시)이며, OAuth 제공자처럼 목록이 없으면 설정된 모델만 제공합니다. 추론 수준은 제공자 형식에 맞게 요청에 반영합니다: 로컬 DeepSeek형 `chat_template_kwargs`, OpenAI `reasoning_effort`/ChatGPT OAuth `reasoning.effort`, Anthropic `thinking` 예산, Gemini `reasoning_effort`. xAI는 모델 이름으로 추론 여부가 정해져 추론 수준을 제공하지 않습니다. 선택은 세션별이며 제공자 설정 자체는 바뀌지 않습니다. 캐시 재사용도 같은 제공자·모델·추론 설정으로 한정합니다.
 - Koharu는 `--watch` 모드로 실행되어 모델을 한 번만 적재하고 새로 올라온 페이지를 이어서 처리합니다. 첫 페이지는 모델 적재 시간이 더해집니다. 새 페이지가 `CT_LIVE_IDLE_SECONDS`(기본 180초) 동안 없으면 엔진이 종료되어 GPU 메모리를 반환하고, 다음 페이지가 오면 다시 시작합니다.
 - 엔진이 새 페이지를 기다리는 동안 다른 세션(다른 모델·추론 설정 등)이나 일반 작업이 대기열에 들어오면, 엔진은 남은 페이지만 마치고 바로 종료해 다음 작업에 자리를 넘깁니다. 대기열에서는 실시간 작업이 일반 작업보다 먼저 실행됩니다.

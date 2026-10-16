@@ -242,11 +242,12 @@ class JobManager:
     # live sessions (browser extension) -------------------------------------------
     def open_live(
         self, *, engine_id: str, provider_id: str, options: dict[str, Any], instructions: str, title: str,
-        llm: dict[str, str] | None = None,
+        llm: dict[str, str] | None = None, device_id: str | None = None,
     ) -> str:
-        """Reuse today's live session for the same settings, so the engine stays warm across tabs.
+        """Reuse today's live session for the same device and settings, so the engine stays warm across tabs.
 
         `llm` holds the session's model / reasoning-level choice ({} = provider defaults).
+        `device_id` is the paired device that owns the session; None is the logged-in web session.
         """
         engine = self.engines.get(engine_id)
         if not engine:
@@ -260,7 +261,8 @@ class JobManager:
         today = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
         with self._lock:
             existing = self.db.find_live_job(
-                engine_id, provider_id, json.dumps(resolved), instructions, json.dumps(llm or {}, sort_keys=True), today
+                engine_id, provider_id, json.dumps(resolved), instructions, json.dumps(llm or {}, sort_keys=True), today,
+                device_id,
             )
             if existing:
                 return existing["id"]
@@ -278,6 +280,7 @@ class JobManager:
                     "message": "페이지 대기 중",
                     "live": 1,
                     "llm": llm or {},
+                    "device_id": device_id,
                     "created_at": time.time(),
                 },
                 [],

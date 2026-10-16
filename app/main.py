@@ -105,14 +105,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return True
         return request.state.device is not None if has_bearer(request) else web_session(request)
 
-    def extension_allowed(method: str, path: str) -> bool:
+    def owns_live_job(job: dict[str, Any] | None, device: dict[str, Any] | None) -> bool:
+        """A paired device may read a live job only when that device opened it."""
+        return bool(device and job and job["live"] and job.get("device_id") == device["id"])
+
+    def extension_allowed(method: str, path: str, device: dict[str, Any] | None) -> bool:
         """Paired devices may only use what the extension needs."""
         if any(method == allowed and pattern.fullmatch(path) for allowed, pattern in EXTENSION_ROUTES):
             return True
         match = LIVE_OUTPUT.fullmatch(path)
         if method == "GET" and match:
-            job = db.get_job(match.group(1))
-            return bool(job and job["live"])
+            return owns_live_job(db.get_job(match.group(1)), device)
         return False
 
     @app.middleware("http")
@@ -132,7 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             elif has_bearer(request):
                 if request.state.device is None:
                     return JSONResponse({"detail": "확장 프로그램 연결이 해제되었습니다. 다시 페어링하세요."}, status_code=401)
-                if not extension_allowed(request.method, path):
+                if not extension_allowed(request.method, path, request.state.device):
                     return JSONResponse({"detail": "확장 프로그램 연결로는 사용할 수 없는 기능입니다."}, status_code=403)
             elif not web_session(request):
                 return JSONResponse({"detail": "로그인이 필요합니다."}, status_code=401)
@@ -553,14 +556,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return PlainTextResponse(data.decode("utf-8", errors="replace"))
 
     # ------------------------------------------------------------------ live sessions (browser extension)
-    def require_live(job_id: str) -> dict[str, Any]:
+    def require_live(job_id: str, request: Request) -> dict[str, Any]:
         job = db.get_job(job_id)
         if not job or not job["live"]:
             raise HTTPException(404, "실시간 번역 세션을 찾을 수 없습니다.")
+        # Cookie sessions are the server owner and may open any live job. A bearer device may not.
+        if request.state.device is not None and not owns_live_job(job, request.state.device):
+            raise HTTPException(403, "이 실시간 번역 세션은 연결된 기기의 세션이 아닙니다.")
         return job
 
     @app.post("/api/live")
-    async def open_live(payload: dict[str, Any]) -> dict[str, Any]:
+    async def open_live(payload: dict[str, Any], request: Request) -> dict[str, Any]:
         provider_id = str(payload.get("provider_id", ""))
         engine = str(payload.get("engine", "koharu"))
         row = require_provider(provider_id)
@@ -588,6 +594,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     model_setup.require_prepared_for_new_job(engines[engine].resolve_options(options))
                 except RuntimeError as exc:
                     raise HTTPException(409, str(exc)) from exc
+            device = request.state.device
             job_id = await asyncio.to_thread(
                 jobs.open_live,
                 engine_id=engine,
@@ -596,14 +603,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 instructions=str(payload.get("instructions", "")),
                 title=str(payload.get("title", "")).strip()[:200] or time.strftime("웹 실시간 번역 %Y-%m-%d"),
                 llm=llm,
+                device_id=device["id"] if device else None,
             )
         except (IngestError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc
-        return {**job_public(require_live(job_id)), "pages": []}
+        return {**job_public(require_live(job_id, request)), "pages": []}
 
     @app.get("/api/live/{job_id}")
-    async def get_live(job_id: str, pages: str = "") -> dict[str, Any]:
-        job = require_live(job_id)
+    async def get_live(job_id: str, request: Request, pages: str = "") -> dict[str, Any]:
+        job = require_live(job_id, request)
         try:
             wanted = {int(part) for part in pages.split(",") if part.strip()}
         except ValueError as exc:
@@ -612,8 +620,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {**job_public(job), "pages": rows}
 
     @app.post("/api/live/{job_id}/pages")
-    async def add_live_page(job_id: str, file: UploadFile = File(...), source_name: str = Form("")) -> dict[str, Any]:
-        require_live(job_id)
+    async def add_live_page(job_id: str, request: Request, file: UploadFile = File(...), source_name: str = Form("")) -> dict[str, Any]:
+        require_live(job_id, request)
         data = await file.read()
         try:
             return await asyncio.to_thread(jobs.add_live_page, job_id, source_name or file.filename or "image", data)
@@ -623,8 +631,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
 
     @app.post("/api/live/{job_id}/discard")
-    async def discard_live_pages(job_id: str, payload: dict[str, Any]) -> dict[str, bool]:
-        require_live(job_id)
+    async def discard_live_pages(job_id: str, payload: dict[str, Any], request: Request) -> dict[str, bool]:
+        require_live(job_id, request)
         try:
             indices = {int(idx) for idx in payload.get("pages") or []}
         except (TypeError, ValueError) as exc:
