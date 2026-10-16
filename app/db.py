@@ -68,6 +68,7 @@ MIGRATIONS = (
     ("jobs", "llm", "TEXT NOT NULL DEFAULT '{}'"),
     # Paired device that opened a live session. NULL is a web session (or a pre-ownership row).
     ("jobs", "device_id", "TEXT"),
+    ("jobs", "priority", "TEXT NOT NULL DEFAULT 'normal'"),
 )
 
 JOB_STATUSES = ("queued", "running", "done", "failed", "cancelled")
@@ -163,9 +164,9 @@ class Database:
             self._conn.execute("BEGIN")
             try:
                 self._conn.execute(
-                    """INSERT INTO jobs (id, title, engine, provider_id, options, instructions, status, message, live, llm, device_id, created_at)
-                       VALUES (:id, :title, :engine, :provider_id, :options, :instructions, :status, :message, :live, :llm, :device_id, :created_at)""",
-                    {"status": "queued", "message": "", "live": 0, "device_id": None, **job, "options": json.dumps(job["options"]), "llm": json.dumps(job.get("llm") or {}, sort_keys=True)},
+                    """INSERT INTO jobs (id, title, engine, provider_id, options, instructions, status, message, live, llm, device_id, priority, created_at)
+                       VALUES (:id, :title, :engine, :provider_id, :options, :instructions, :status, :message, :live, :llm, :device_id, :priority, :created_at)""",
+                    {"status": "queued", "message": "", "live": 0, "device_id": None, "priority": "normal", **job, "options": json.dumps(job["options"]), "llm": json.dumps(job.get("llm") or {}, sort_keys=True)},
                 )
                 self._conn.executemany(
                     "INSERT INTO pages (job_id, idx, source_name, file, sha256) VALUES (:job_id, :idx, :source_name, :file, :sha256)",
@@ -183,18 +184,34 @@ class Database:
         return self._one("SELECT * FROM jobs WHERE id = ?", (job_id,))
 
     def next_queued_job(self) -> dict[str, Any] | None:
-        # Live (browser extension) sessions wait on a reader, so they go first.
-        return self._one("SELECT * FROM jobs WHERE status = 'queued' ORDER BY live DESC, created_at LIMIT 1")
+        # Single-image requests use page arrival order, not the age of a reused session.
+        return self._one(
+            """SELECT jobs.* FROM jobs WHERE status = 'queued'
+               ORDER BY COALESCE(priority, 'normal') = 'single' DESC,
+                 CASE WHEN priority = 'single' THEN
+                   (SELECT MIN(pages.rowid) FROM pages WHERE job_id = jobs.id AND output IS NULL AND error IS NULL)
+                 END,
+                 live DESC, created_at, jobs.rowid LIMIT 1"""
+        )
+
+    def next_priority_job(self) -> dict[str, Any] | None:
+        return self._one(
+            """SELECT jobs.* FROM pages JOIN jobs ON jobs.id = pages.job_id
+               WHERE jobs.live = 1 AND jobs.priority = 'single' AND jobs.status IN ('queued', 'running')
+                 AND pages.output IS NULL AND pages.error IS NULL
+               ORDER BY pages.rowid LIMIT 1"""
+        )
 
     def find_live_job(
         self, engine: str, provider_id: str, options: str, instructions: str, llm: str, since: float,
-        device_id: str | None = None,
+        device_id: str | None = None, priority: str = "normal",
     ) -> dict[str, Any] | None:
         # Same settings reuse one session per paired device (or per web session, when device_id is NULL).
         return self._one(
             """SELECT * FROM jobs WHERE live = 1 AND engine = ? AND provider_id = ? AND options = ? AND instructions = ?
-               AND llm = ? AND created_at >= ? AND device_id IS ? ORDER BY created_at DESC LIMIT 1""",
-            (engine, provider_id, options, instructions, llm, since, device_id),
+               AND llm = ? AND created_at >= ? AND device_id IS ? AND COALESCE(priority, 'normal') = ?
+               ORDER BY created_at DESC LIMIT 1""",
+            (engine, provider_id, options, instructions, llm, since, device_id, priority),
         )
 
     def update_job(self, job_id: str, **fields: Any) -> None:

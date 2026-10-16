@@ -41,6 +41,8 @@ class EngineRun:
     watch_idle_seconds: int | None = None
     # Per-job intermediate state; browser-extension live sessions do not use it.
     cache_dir: Path | None = None
+    # Existing ct_batch success/error events delimit admission of the next live page.
+    page_finished: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -166,10 +168,17 @@ class Engine:
             name = str(event["page_error"])
             run.page_errors.append(f"{name}: {event.get('message', '')}")
             run.failed_files[name] = str(event.get("message", ""))
+            if run.page_finished:
+                run.page_finished(name)
             return
         if "page" in event:
             run.started_files.add(str(event["page"]))
         run.report(float(event.get("progress", 0.0)), str(event.get("message", "")))
+        # ct_batch emits this only after saving the output, not on stage progress.
+        message = str(event.get("message", ""))
+        name = message.removesuffix(" 완료")
+        if run.page_finished and message.endswith(" 완료") and name in run.started_files:
+            run.page_finished(name)
 
 
 def _redact(argv: list[str]) -> list[str]:

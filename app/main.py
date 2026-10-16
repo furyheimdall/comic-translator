@@ -424,6 +424,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data = {
             **{key: job[key] for key in ("id", "title", "engine", "provider_id", "status", "progress", "message", "error", "created_at", "started_at", "finished_at", "instructions")},
             "live": bool(job["live"]),
+            "priority": job.get("priority") or "normal",
             "llm": json.loads(job["llm"] or "{}"),
             "options": json.loads(job["options"]),
             "page_count": len(pages),
@@ -604,6 +605,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 title=str(payload.get("title", "")).strip()[:200] or time.strftime("웹 실시간 번역 %Y-%m-%d"),
                 llm=llm,
                 device_id=device["id"] if device else None,
+                priority=payload.get("priority", "normal"),
             )
         except (IngestError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc
