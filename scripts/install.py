@@ -327,7 +327,7 @@ def access_urls(host: str, port: int) -> list[str]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", type=host_type, default="127.0.0.1")
-    parser.add_argument("--port", type=port_type, default=8710)
+    parser.add_argument("--port", type=port_type, default=18710)
     parser.add_argument("--data-dir", default="~/.local/share/comic-translator")
     parser.add_argument("--config-dir", default="~/.config/comic-translator")
     parser.add_argument("--service-name", type=service_type, default="comic-translator")

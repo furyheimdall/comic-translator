@@ -54,7 +54,7 @@ struct Arguments {
     /// Private intermediate checkpoints; omit to retain the ordinary full pipeline.
     #[arg(long)]
     cache_dir: Option<PathBuf>,
-    /// OpenAI-compatible base URL, e.g. http://127.0.0.1:8710/llm/v1
+    /// OpenAI-compatible base URL, e.g. http://127.0.0.1:18710/llm/v1
     #[arg(long)]
     base_url: url::Url,
     /// Model id sent to the endpoint.
@@ -578,7 +578,7 @@ mod checkpoint_tests {
     fn arguments() -> Arguments {
         Arguments::try_parse_from([
             "ct_batch", "--input-dir", ".", "--output-dir", ".",
-            "--base-url", "http://localhost:8710/v1", "--model", "first",
+            "--base-url", "http://localhost:18710/v1", "--model", "first",
             "--api-key", "test",
         ]).unwrap()
     }

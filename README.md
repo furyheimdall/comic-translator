@@ -74,7 +74,7 @@ cd comic-translator
 python3 scripts/install.py --engine koharu
 ```
 
-기본값은 `127.0.0.1:8710`이며, 같은 컴퓨터에서만 접속할 수 있습니다. 설치기는 잠금 파일에 맞춰 앱 환경을 구성하고, 선택한 엔진을 설치한 뒤 환경 파일·실행기·systemd 사용자 유닛을 생성합니다. **기본적으로 서비스를 시작하거나 자동 시작을 활성화하지 않습니다.**
+기본값은 `127.0.0.1:18710`이며, 같은 컴퓨터에서만 접속할 수 있습니다. 설치기는 잠금 파일에 맞춰 앱 환경을 구성하고, 선택한 엔진을 설치한 뒤 환경 파일·실행기·systemd 사용자 유닛을 생성합니다. **기본적으로 서비스를 시작하거나 자동 시작을 활성화하지 않습니다.**
 
 기본 저장 위치:
 
@@ -116,7 +116,7 @@ python3 "$HOME/.config/comic-translator/run.py"
 
 위 두 설치 방식 중 하나를 선택하세요. 이미 설치한 경우 설치 명령을 반복하지 않고 생성된 실행기를 사용합니다. 수동 실행기는 환경 파일을 읽고 실제 앱 프로세스를 시작합니다. 환경 파일을 셸에서 `source`하지 마세요.
 
-기본 접속 주소: **<http://127.0.0.1:8710>**
+기본 접속 주소: **<http://127.0.0.1:18710>**
 
 ## 설치 파라미터
 
@@ -125,7 +125,7 @@ python3 "$HOME/.config/comic-translator/run.py"
 | 옵션 | 용도 |
 |---|---|
 | `--host` | 바인딩 주소. 기본 `127.0.0.1`, LAN 공개 시 `0.0.0.0` |
-| `--port` | HTTP 포트. 기본 `8710` |
+| `--port` | HTTP 포트. 기본 `18710` |
 | `--data-dir` | DB·원고·번역 결과·로그 보관 경로 |
 | `--config-dir` | 비밀 환경 파일과 실행기 보관 경로 |
 | `--service-name` | systemd 사용자 서비스 이름. 별도 인스턴스는 서로 다른 이름·포트·경로 사용 |
@@ -143,7 +143,7 @@ LAN용 대화형 설치 예시:
 python3 scripts/install.py \
   --engine koharu \
   --host 0.0.0.0 \
-  --port 8710 \
+  --port 18710 \
   --data-dir "$HOME/.local/share/comic-translator" \
   --config-dir "$HOME/.config/comic-translator"
 ```
