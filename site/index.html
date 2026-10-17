@@ -68,14 +68,14 @@
           <li><h3>번역 설정 저장</h3><p>서버가 제공하는 목록에서 번역 제공자·모델·추론 수준을 고르고 <strong>설정 저장</strong>을 누릅니다. 지원하지 않는 추론 수준은 목록에 표시되지 않습니다.</p></li>
           <li><h3>원하는 이미지 번역</h3><p>한 장만 번역하려면 이미지에서 오른쪽 클릭 → <strong>이 이미지 번역</strong>을 선택하세요. 지금 보는 사이트를 번역하려면 팝업의 <strong>이 사이트 번역</strong>을 켭니다. <strong>원본 보기 / 번역 보기</strong>로 화면 표시를 바꿀 수 있습니다.</p></li>
         </ol>
-        <p class="callout">서버가 다른 컴퓨터에 있다면 확장에는 그 컴퓨터의 LAN IP와 실제 포트를 입력하세요. 기본 설치 주소 <code>127.0.0.1:8710</code>은 서버 컴퓨터에서만 접속됩니다. LAN에 공개하려면 설치 시 바인딩 주소를 <code>0.0.0.0</code>으로 설정하고 로그인 비밀번호를 지정해야 합니다. <code>0.0.0.0</code>은 접속 주소가 아닙니다. <a href="https://github.com/furyheimdall/comic-translator#%EC%84%A4%EC%B9%98-%ED%8C%8C%EB%9D%BC%EB%AF%B8%ED%84%B0">LAN 설치 안내</a></p>
+        <p class="callout">서버가 다른 컴퓨터에 있다면 확장에는 그 컴퓨터의 LAN IP와 실제 포트를 입력하세요. 기본 설치 주소 <code>127.0.0.1:18710</code>은 서버 컴퓨터에서만 접속됩니다. LAN에 공개하려면 설치 시 바인딩 주소를 <code>0.0.0.0</code>으로 설정하고 로그인 비밀번호를 지정해야 합니다. <code>0.0.0.0</code>은 접속 주소가 아닙니다. <a href="https://github.com/furyheimdall/comic-translator#%EC%84%A4%EC%B9%98-%ED%8C%8C%EB%9D%BC%EB%AF%B8%ED%84%B0">LAN 설치 안내</a></p>
       </div>
     </section>
 
     <section class="section" id="install" aria-labelledby="install-title">
       <div class="container split">
         <div class="section-heading"><p class="kicker">03 / 시작하기</p><h2 id="install-title">Linux 서버에 설치합니다.</h2><p>Python 3.12 이상과 uv, 엔진별 의존성이 필요합니다. 설치기는 systemd 사용자 서비스를 등록하지만 별도 옵션 없이는 시작하거나 자동 시작을 켜지 않습니다. systemd 사용자 서비스나 세션 버스가 없다면 <code>--no-systemd</code>로 설치해 수동 실행기로 실행하세요. 소스 패키지에는 모델·폰트·GPU 엔진이 들어 있지 않으며, 선택한 엔진은 설치 과정에서 받아 설치합니다.</p><p>GPU 번역을 실제 확인한 조합은 Ubuntu 24.04/aarch64, NVIDIA GB10(DGX Spark), 드라이버 580, CUDA 13.0입니다. 다른 Linux·GPU 조합에서도 설치는 시도할 수 있지만 엔진 실행은 별도 검증이 필요합니다.</p><a class="text-link" href="https://github.com/furyheimdall/comic-translator#%EC%A7%80%EC%9B%90-%ED%99%98%EA%B2%BD%EA%B3%BC-%EC%A4%80%EB%B9%84%EB%AC%BC">지원 환경과 준비물 확인 <span aria-hidden="true">↗</span></a></div>
-        <div class="install-panel"><p class="panel-label">로컬 설치 · 기본 127.0.0.1:8710</p><pre><code>git clone https://github.com/furyheimdall/comic-translator.git
+        <div class="install-panel"><p class="panel-label">로컬 설치 · 기본 127.0.0.1:18710</p><pre><code>git clone https://github.com/furyheimdall/comic-translator.git
 cd comic-translator
 python3 scripts/install.py --engine koharu
 systemctl --user start comic-translator</code></pre><p>서버 웹 UI에서 모델을 준비하고 LLM 제공자를 연결한 뒤 원고를 올리세요. 다른 기기에서 접속하려면 설치 시 바인딩 주소를 <code>0.0.0.0</code>으로 두고 로그인 비밀번호를 설정해야 합니다.</p></div>

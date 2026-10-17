@@ -14,7 +14,7 @@ from scripts import install
 def test_environment_roundtrip_handles_shell_and_systemd_metacharacters(tmp_path: Path) -> None:
     expected = {"CT_PASSWORD": ' spaced "quote" \\ $dollar `ticks` %percent #hash ;semicolon ',
                 "CT_DATA_DIR": '/tmp/source tree/with % and "quotes"',
-                "CT_HOST": "0.0.0.0", "CT_PORT": "8710"}
+                "CT_HOST": "0.0.0.0", "CT_PORT": "18710"}
     env_file = tmp_path / "env"
     env_file.write_text("# maintained locally\n;\n  \n" + install.render_env(expected), encoding="utf-8")
     assert install.read_env(env_file) == expected
@@ -48,7 +48,7 @@ def test_existing_config_is_refused_before_dependency_changes(tmp_path: Path, mo
     args = SimpleNamespace(no_systemd=True, enable=False, start=False,
                            data_dir=tmp_path / "data", config_dir=config,
                            service_name="test", password_file=None, host="127.0.0.1",
-                           port=8710, engine="none", python="3.13", non_interactive=True)
+                           port=18710, engine="none", python="3.13", non_interactive=True)
     with pytest.raises(install.InstallError, match="refusing to replace existing file"):
         install.install(args)
     assert existing.read_text() == "DO_NOT_CHANGE=1\n"
@@ -92,6 +92,15 @@ def test_external_noninteractive_bind_generates_private_login(tmp_path: Path, mo
     assert secret not in capsys.readouterr().out
     assert (config / "env").stat().st_mode & 0o777 == 0o600
     assert config.stat().st_mode & 0o777 == 0o700
+
+
+def test_default_port_is_18710(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert install.parse_args([]).port == 18710
+    monkeypatch.delenv("CT_PORT", raising=False)
+    from app.settings import load_settings
+    assert load_settings().port == 18710
+    monkeypatch.setenv("CT_PORT", "12345")
+    assert load_settings().port == 12345
 
 
 def test_installer_exposes_no_model_cache_or_token_arguments() -> None:

@@ -59,7 +59,7 @@ class Settings:
 
 def load_settings() -> Settings:
     data_dir = _path("CT_DATA_DIR", ROOT / "data")
-    port = int(os.environ.get("CT_PORT", "8710"))
+    port = int(os.environ.get("CT_PORT", "18710"))
     return Settings(
         data_dir=data_dir,
         host=os.environ.get("CT_HOST", "127.0.0.1"),
