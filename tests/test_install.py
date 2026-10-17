@@ -99,8 +99,8 @@ def test_default_port_is_18710(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CT_PORT", raising=False)
     from app.settings import load_settings
     assert load_settings().port == 18710
-    monkeypatch.setenv("CT_PORT", "8710")
-    assert load_settings().port == 8710
+    monkeypatch.setenv("CT_PORT", "12345")
+    assert load_settings().port == 12345
 
 
 def test_installer_exposes_no_model_cache_or_token_arguments() -> None:
