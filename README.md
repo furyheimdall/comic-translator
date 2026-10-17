@@ -156,7 +156,7 @@ python3 scripts/install.py \
 
 앱 프로세스 환경에 `CT_PORT`가 있으면 그 값이 유지되고, 없으면 새 기본값 `18710`이 적용됩니다. 설치기 EnvironmentFile을 읽는 수동 실행기와 systemd 사용자 서비스는 그 파일의 `CT_PORT`를 프로세스 환경에 넣으므로 이 경우에 해당합니다. 저장소 `.env`는 자동으로 읽지 않으므로 그 파일에만 적은 값은 효과가 없습니다.
 
-설치기가 만든 비공개 EnvironmentFile(기본 `~/.config/comic-translator/env`)을 그 실행기와 서비스가 넣습니다. 설치기는 처음 소스 설치 패키지부터 EnvironmentFile에 `CT_PORT`를 항상 기록하고, 그 줄이 없으면 환경 파일을 불완전하다고 거부합니다. 소스를 업데이트해도 설치기는 기존 파일을 덮어쓰지 않습니다.
+수동 실행기와 systemd 사용자 서비스는 설치기가 만든 비공개 EnvironmentFile(기본 `~/.config/comic-translator/env`)을 읽습니다. 설치기는 처음 소스 설치 패키지부터 EnvironmentFile에 `CT_PORT`를 항상 기록하고, 그 줄이 없으면 환경 파일을 불완전하다고 거부합니다. 소스를 업데이트해도 설치기는 기존 파일을 덮어쓰지 않습니다.
 
 새 기본 포트로 옮기려면 다음만 하면 됩니다.
 
