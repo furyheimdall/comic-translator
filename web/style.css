@@ -53,6 +53,23 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .profile p { margin: 0; }
 .models { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.4rem; }
 .mono, .files { overflow-wrap: anywhere; }
+.platform-banner, .preset-notice { border-left: 3px solid var(--accent); background: var(--bg); padding: 0.85rem 1rem; border-radius: 6px; }
+.platform-banner p, .preset-notice p { margin: 0; }
+.recommendation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.recommendation { align-content: start; gap: 0.75rem; min-width: 0; }
+.recommendation h4 { font-size: 1.05rem; }
+.preset-choices { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 0.5rem 0.75rem; margin: 0; }
+.preset-choices dt { color: var(--muted); }
+.preset-choices dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; }
+.preset-actions { display: grid; gap: 0.5rem; margin-top: auto; }
+.preset-actions > * { text-align: center; }
+.catalog-content { padding-top: 0.85rem; }
+.catalog-content > p { margin: 0; }
+.profile > details > .models { margin-top: 0.75rem; }
+.profile > details > p { margin-top: 0.5rem; }
+details > summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+details > summary:focus-visible, .profile:focus, .button:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.engine-group { scroll-margin-top: 6rem; }
 input, select, textarea {
   font: inherit; padding: 0.5rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; background: #fff;
 }
@@ -98,4 +115,10 @@ ul.plain li { padding: 0.4rem 0; border-top: 1px solid var(--line); }
   nav { flex-wrap: wrap; }
   nav a { padding: 0.6rem 0.7rem; }
   .card { padding: 0.9rem; }
+  .recommendation-grid { grid-template-columns: minmax(0, 1fr); }
+  .preset-choices { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; }
+  .preset-choices dd { margin-bottom: 0.5rem; }
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .profile { padding: 0.75rem; min-width: 0; }
+  .profile .row > *, .platform-banner { min-width: 0; overflow-wrap: anywhere; }
 }

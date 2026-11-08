@@ -68,7 +68,7 @@ async function route() {
     if (!state.meta) state.meta = await api("/api/meta");
     state.providers = await api("/api/providers");
     if (version !== state.routeVersion) return;
-    if (section === "new") return await renderNewJob(version);
+    if (section === "new") return await renderNewJob(version, id ? decodeURIComponent(id) : null);
     if (section === "models") return await renderModelSetup(version, id ? decodeURIComponent(id) : null);
     if (section === "providers") return renderProviders();
     if (section === "extension") return await renderExtension(version);
@@ -177,7 +177,7 @@ function optionField(engine, option) {
   );
 }
 
-async function renderNewJob(version) {
+async function renderNewJob(version, presetId = null) {
   const connected = state.providers.filter((p) => p.connected);
   if (!connected.length) {
     view.replaceChildren(
@@ -196,19 +196,49 @@ async function renderNewJob(version) {
   const modelSetup = await api("/api/model-setup").catch(() => null);
   if (version !== state.routeVersion) return;
   const engines = state.meta.engines;
-  const firstAvailable = engines.find((e) => e.available) || engines[0];
+  const preset = modelSetup?.recommendations?.find((item) => item.id === presetId);
+  const engineAvailable = (engine) => engine.available && (!modelSetup?.platform || modelSetup.platform.supported_engines.includes(engine.id));
+  const appliedPreset = preset?.available ? preset : null;
+  const firstAvailable = engines.find((e) => e.id === appliedPreset?.engine) || engines.find(engineAvailable) || engines[0];
   const engineOptions = h("div", { id: "engine-options" });
-
+  const visionNote = h("p", { class: "muted", role: "status" });
+  const optionValues = new Map(appliedPreset ? [[appliedPreset.engine, { ...appliedPreset.options }]] : []);
+  let shownEngine = null;
+  const selectedProvider = () => connected.find((provider) => provider.id === form.elements.provider_id.value);
+  const syncVision = () => {
+    const field = form.elements[`opt:${shownEngine}:vision`];
+    visionNote.hidden = !field;
+    if (!field) return;
+    const allowed = !!selectedProvider()?.vision;
+    field.disabled = !allowed;
+    if (!allowed) field.checked = false;
+    visionNote.textContent = !allowed
+      ? "이미지 문맥(비전) 끔: 선택한 LLM 제공자가 이미지 입력을 허용하지 않습니다. OCR 텍스트로 번역합니다. 제공자 설정에서 이미지 입력을 허용한 모델을 선택해야 켤 수 있습니다."
+      : field.checked
+        ? "이미지 문맥(비전) 켬: OCR 텍스트와 함께 이미지도 LLM에 전달합니다."
+        : "이미지 문맥(비전) 끔: OCR 텍스트만 LLM에 전달합니다. 제공자를 바꿔도 자동으로 다시 켜지지 않으므로 필요하면 직접 선택하세요.";
+  };
   const showEngineOptions = (engineId) => {
+    if (shownEngine) {
+      const values = {};
+      for (const option of engines.find((e) => e.id === shownEngine).options) {
+        const field = form.elements[`opt:${shownEngine}:${option.key}`];
+        values[option.key] = option.type === "bool" ? field.checked : field.value;
+      }
+      optionValues.set(shownEngine, values);
+    }
+    shownEngine = engineId;
     const engine = engines.find((e) => e.id === engineId);
+    const values = optionValues.get(engineId) || {};
     engineOptions.replaceChildren(
-      ...[
-        h("p", { class: "muted" }, engine.description),
-        engine.available ? null : h("p", { class: "error" }, `사용 불가: ${engine.reason}`),
-        modelHint(engine, modelSetup),
-        h("div", { class: "grid" }, engine.options.map((o) => optionField(engine, o))),
-      ].filter(Boolean),
+      h("p", { class: "muted" }, engine.description),
+      engineAvailable(engine) ? null : h("p", { class: "error" }, `사용 불가: ${engine.reason || modelSetup?.platform?.description || "서버에서 지원하지 않는 엔진입니다."}`),
+      modelHint(engine, modelSetup),
+      h("div", { class: "grid" }, engine.options.map((option) => optionField(engine, Object.hasOwn(values, option.key) ? { ...option, default: values[option.key] } : option))),
+      visionNote,
     );
+    form.querySelector("button[type=submit]").disabled = !progress.hidden || !engineAvailable(engine);
+    syncVision();
   };
 
   const fileInput = h("input", { type: "file", name: "files", multiple: true, accept: ".png,.jpg,.jpeg,.webp,.zip,.cbz,.pdf", required: true });
@@ -235,14 +265,14 @@ async function renderNewJob(version) {
         h(
           "select",
           { name: "engine", onchange: (e) => showEngineOptions(e.target.value) },
-          engines.map((e) => h("option", { value: e.id, selected: e.id === firstAvailable.id }, `${e.name}${e.available ? "" : " (설치 필요)"}`)),
+          engines.map((e) => h("option", { value: e.id, selected: e.id === firstAvailable.id }, `${e.name}${engineAvailable(e) ? "" : " (사용 불가)"}`)),
         ),
       ),
       h(
         "label",
         {},
         "LLM 제공자",
-        h("select", { name: "provider_id" }, connected.map((p) => h("option", { value: p.id }, `${p.name} · ${p.model}`))),
+        h("select", { name: "provider_id", onchange: syncVision }, connected.map((p) => h("option", { value: p.id }, `${p.name} · ${p.model}`))),
       ),
     ),
     engineOptions,
@@ -261,6 +291,7 @@ async function renderNewJob(version) {
     progress,
   );
   showEngineOptions(firstAvailable.id);
+  engineOptions.addEventListener("change", syncVision);
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -272,6 +303,7 @@ async function renderNewJob(version) {
       const field = form.elements[`opt:${engineId}:${option.key}`];
       options[option.key] = option.type === "bool" ? field.checked : option.type === "int" ? Number(field.value) : field.value;
     }
+    if (!selectedProvider()?.vision && Object.hasOwn(options, "vision")) options.vision = false;
     const body = new FormData();
     for (const file of fileInput.files) body.append("files", file, file.name);
     body.append("engine", engineId);
@@ -290,7 +322,7 @@ async function renderNewJob(version) {
       const res = JSON.parse(xhr.responseText || "{}");
       if (xhr.status >= 400) {
         toast(res.detail || `업로드 실패 (HTTP ${xhr.status})`, true);
-        form.querySelector("button[type=submit]").disabled = false;
+        form.querySelector("button[type=submit]").disabled = !engineAvailable(engines.find((e) => e.id === form.elements.engine.value));
         progress.hidden = true;
         return;
       }
@@ -300,7 +332,15 @@ async function renderNewJob(version) {
     xhr.send(body);
   });
 
-  view.replaceChildren(h("section", { class: "card" }, h("h2", {}, "새 번역"), form));
+  const presetNotice = !presetId ? null
+    : !preset ? h("p", { class: "error" }, "선택한 조합을 불러올 수 없어 자동 적용하지 않았습니다. 아래 옵션을 직접 확인하세요.")
+    : !appliedPreset ? h("p", { class: "error" }, `이 서버에서 선택한 조합을 사용할 수 없어 적용하지 않았습니다. ${preset.reason || ""}`)
+    : h("aside", { class: "preset-notice stack" },
+      h("strong", {}, `${preset.label} 적용됨`),
+      h("p", {}, "아래 엔진·OCR·지우기 옵션에 반영했습니다. 옵션은 직접 바꿀 수 있으며, 이 화면에서는 모델을 다운로드하지 않습니다."),
+      preset.prepared ? h("p", { class: "ok" }, "이 조합의 모델 파일이 준비되어 있습니다. 실제 가속 실행 여부를 보장하지는 않습니다.")
+        : h("p", { class: "muted" }, "이 조합의 모델 파일을 저장 위치에서 확인하지 못했습니다. ", h("a", { href: `#/models/${encodeURIComponent(preset.engine)}` }, "모델 준비 확인")));
+  view.replaceChildren(h("section", { class: "card stack" }, h("h2", {}, "새 번역"), presetNotice, form));
 }
 
 // ------------------------------------------------------------------ job detail
@@ -511,6 +551,59 @@ async function renderModelSetup(version, focusEngine) {
   if (version !== state.routeVersion) return;
   const engineMeta = (id) => state.meta.engines.find((e) => e.id === id);
   const isRunning = () => setup.status?.state === "running";
+  const platformBanner = h("aside", { class: "platform-banner stack", "aria-labelledby": "model-platform-title" });
+  const recommendationsBox = h("div", { class: "recommendation-grid" });
+  const replacePreserving = (container, ...children) => {
+    const open = new Map([...container.querySelectorAll("details[data-detail-key]")].map((el) => [el.dataset.detailKey, el.open]));
+    const focused = container.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
+    container.replaceChildren(...children);
+    for (const detail of container.querySelectorAll("details[data-detail-key]")) {
+      if (open.has(detail.dataset.detailKey)) detail.open = open.get(detail.dataset.detailKey);
+    }
+    if (focused) {
+      const target = [...container.querySelectorAll("[data-focus-key]")].find((el) => el.dataset.focusKey === focused);
+      (target?.disabled ? target.closest("article") : target)?.focus({ preventScroll: true });
+    }
+  };
+  const renderPlatform = () => {
+    const platform = setup.platform;
+    platformBanner.replaceChildren(
+      h("strong", { id: "model-platform-title" }, `서버 플랫폼 · ${platform?.label || "정보 없음"}`),
+      h("p", {}, platform?.description || "서버 플랫폼 정보를 확인하지 못했습니다."),
+      h("p", { class: "muted" }, "이 브라우저가 아니라 번역 서버의 운영체제·아키텍처 기준입니다. ",
+        platform?.accelerator ? `가속 경로: ${{ metal: "Metal", cuda: "CUDA (NVIDIA 설정 경로)", none: "지원 없음" }[platform.accelerator] || platform.accelerator}. ` : "",
+        "플랫폼 지원·엔진 설치·모델 파일 준비는 서로 다르며, GPU 감지나 실제 가속 실행을 보장하지 않습니다."),
+    );
+  };
+  const choiceLabel = (engineId, key, value) => engineMeta(engineId)?.options.find((option) => option.key === key)?.choices?.find((choice) => choice.value === value)?.label || String(value);
+  const renderRecommendations = () => {
+    replacePreserving(recommendationsBox, ...(setup.recommendations || []).map((item) => {
+      const profile = setup.profiles?.find((p) => p.id === item.profile_id);
+      const supported = !setup.platform || setup.platform.supported_engines.includes(item.engine);
+      const active = setup.status?.profile_id === item.profile_id && isRunning();
+      const failed = setup.status?.profile_id === item.profile_id && setup.status?.state === "failed";
+      return h("article", { class: `profile recommendation ${active ? "active" : ""}`, tabindex: "-1", "data-focus-key": `preset-${item.id}` },
+        h("h4", {}, item.label),
+        h("p", { class: "muted" }, item.description),
+        h("dl", { class: "preset-choices" },
+          h("dt", {}, "글자 읽기 (OCR)"), h("dd", {}, choiceLabel(item.engine, "ocr", item.options.ocr)),
+          h("dt", {}, "원문 지우기"), h("dd", {}, choiceLabel(item.engine, "inpainting", item.options.inpainting)),
+          h("dt", {}, "이미지 문맥 (비전)"), h("dd", {}, item.options.vision ? "이미지 입력 허용 LLM에서 켬" : "끔")),
+        h("div", { class: "row" },
+          h("span", { class: `badge ${item.available ? "done" : "failed"}` }, item.available ? "지원 엔진 설치됨" : supported ? "엔진 설치 필요" : "서버 미지원"),
+          h("span", { class: `badge ${active ? "running" : item.prepared ? "done" : failed ? "failed" : "queued"}` }, active ? "파일 다운로드 중" : item.prepared ? "필수 파일 준비됨" : failed ? "다운로드 실패" : "필수 파일 미준비")),
+        !item.available ? h("p", { class: "error" }, item.reason || "서버 플랫폼 지원과 엔진 설치 상태를 확인하세요.") : null,
+        h("p", { class: "muted" }, `다운로드 묶음: ${profile?.label || item.profile_id}`),
+        item.notes?.length ? h("ul", { class: "hints muted" }, item.notes.map((note) => h("li", {}, note))) : null,
+        h("div", { class: "preset-actions" },
+          h("button", { class: item.prepared ? "secondary" : "", disabled: isRunning() || !item.available || !profile, "data-focus-key": `preset-${item.id}-prepare`, "aria-label": `${item.label} ${failed ? "다운로드 다시 시도" : "필수 모델 준비"}`, onclick: () => prepare(profile) }, active ? "준비 중…" : failed ? "다운로드 다시 시도" : item.prepared ? "필수 파일 다시 받기" : "필수 모델 준비"),
+          item.available && item.prepared
+            ? h("a", { class: "button", href: `#/new/${encodeURIComponent(item.id)}`, "data-focus-key": `preset-${item.id}-new`, "aria-label": `${item.label} 조합으로 새 번역` }, "이 조합으로 새 번역")
+            : h("button", { disabled: true }, "이 조합으로 새 번역")),
+        item.available && !item.prepared ? h("small", { class: "muted" }, "필수 모델 준비가 끝나면 이 조합으로 새 번역을 열 수 있습니다.") : null,
+      );
+    }));
+  };
 
   // --- storage + token form
   const cacheInput = h("input", { id: "model-cache-dir", name: "cache_dir", class: "mono", value: setup.cache_dir || "", required: true, autocomplete: "off", spellcheck: "false", "aria-describedby": "model-cache-help" });
@@ -608,7 +701,7 @@ async function renderModelSetup(version, focusEngine) {
     }
     const parts = [];
     if (s.state === "idle") {
-      parts.push(h("p", { class: "muted" }, "아직 시작한 다운로드가 없습니다. 아래 프로필에서 받을 모델을 고르세요."));
+      parts.push(h("p", { class: "muted" }, "아직 시작한 다운로드가 없습니다. 추천 조합에서 필요한 묶음 하나를 고르세요."));
     } else if (s.state === "running") {
       const counted = Number.isFinite(s.total) && s.total > 0;
       parts.push(
@@ -640,39 +733,42 @@ async function renderModelSetup(version, focusEngine) {
   };
 
   const renderProfiles = () => {
-    const running = isRunning();
     const groups = new Map();
     for (const profile of setup.profiles || []) {
       if (!groups.has(profile.engine)) groups.set(profile.engine, []);
       groups.get(profile.engine).push(profile);
     }
     if (!groups.size) {
-      profilesBox.replaceChildren(h("p", { class: "muted" }, "서버가 알려 준 모델 프로필이 없습니다."));
+      replacePreserving(profilesBox, h("p", { class: "muted" }, "서버가 알려 준 모델 프로필이 없습니다."));
       return;
     }
-    profilesBox.replaceChildren(
-      ...[...groups].map(([engineId, profiles]) => {
-        const engine = engineMeta(engineId);
-        const installed = profiles[0].engine_installed ?? engine?.available;
-        return h(
-          "section",
-          { class: "engine-group stack", id: `models-${engineId}`, "data-engine": engineId, tabindex: "-1", "aria-labelledby": `models-${engineId}-title` },
-          h(
-            "div",
-            { class: "row between" },
-            h("h3", { id: `models-${engineId}-title` }, engine?.name || engineId),
-            h("span", { class: `badge ${installed ? "done" : "failed"}` }, installed ? "엔진 설치됨" : "엔진 미설치"),
-          ),
-          installed
-            ? null
-            : h("p", { class: "muted" }, engine?.reason ? `${engine.reason} ` : "", "엔진은 설치 스크립트로 따로 설치해야 합니다. 모델만 받아도 엔진 없이는 번역할 수 없습니다."),
-          profiles.some((p) => p.default)
-            ? null
-            : h("p", { class: "muted" }, "이 엔진은 일부 보조 모델만 여기서 미리 받을 수 있습니다. 번역을 실행할 때 엔진이 다른 모델을 추가로 내려받을 수 있습니다."),
-          profiles.map((profile) => profileCard(profile, running)),
-        );
-      }),
-    );
+    replacePreserving(profilesBox, ...[...groups].map(([engineId, profiles]) => {
+      const engine = engineMeta(engineId);
+      const installed = profiles[0].engine_installed ?? engine?.available;
+      const supported = !setup.platform || setup.platform.supported_engines.includes(engineId);
+      const categories = [
+        ["base", "기본 필수 구성", "기본 조합에 필요한 감지·OCR·지우기 모델입니다. 추천 조합을 준비했다면 다시 받을 필요가 없습니다."],
+        ["ocr", "선택 OCR · 글자 읽기", "글자를 읽는 모델을 바꿀 때만 필요합니다. 다운로드 후 새 번역의 OCR 옵션도 직접 선택해야 합니다."],
+        ["inpainting", "선택 지우기 · 배경 복원", "원문을 지운 자리를 복원하는 모델입니다. 다운로드 후 새 번역의 지우기 옵션도 직접 선택해야 합니다."],
+        ["supplemental", "보조 모델 · 전체 설치 아님", "일부 보조 파일만 준비합니다. MT 전체 모델 설치나 오프라인 실행 준비를 뜻하지 않으며, 실행 시 다른 모델이 추가로 필요할 수 있습니다."],
+      ];
+      const partial = profiles.every((profile) => (profile.category || (profile.supplemental ? "supplemental" : "")) === "supplemental");
+      return h("details", { class: "engine-group", id: `models-${engineId}`, "data-engine": engineId, "data-detail-key": `engine-${engineId}`, open: focusEngine === engineId },
+        h("summary", { "data-focus-key": `engine-${engineId}` }, `${engine?.name || engineId} · ${!supported ? "서버 미지원" : !installed ? "엔진 미설치" : "엔진 설치됨"}${partial ? " · 보조 파일만 제공" : ""}`),
+        h("div", { class: "stack catalog-content" },
+          h("p", { class: !supported || !installed ? "error" : "muted" }, !supported
+            ? `이 서버 플랫폼에서는 지원하지 않습니다. ${profiles[0].reason || engine?.reason || setup.platform.description} 파일을 받아도 이 서버에서 사용할 수 있는 엔진이 되지 않습니다.`
+            : !installed ? `${profiles[0].reason || engine?.reason || ""} 엔진은 설치 스크립트로 별도 설치해야 합니다. 모델 파일만 받아도 번역할 수 없습니다.`
+              : "엔진 설치됨은 실제 GPU 실행 확인을 뜻하지 않습니다. 모델 파일과 작업 옵션을 별도로 준비하세요."),
+          categories.map(([category, label, explanation]) => {
+            const items = profiles.filter((profile) => (profile.category || (profile.default ? "base" : profile.supplemental ? "supplemental" : profile.id.includes("-ocr-") ? "ocr" : "inpainting")) === category);
+            if (!items.length) return null;
+            return h("details", { "data-detail-key": `${engineId}-${category}` },
+              h("summary", { "data-focus-key": `${engineId}-${category}` }, `${label} · ${items.length}개`),
+              h("div", { class: "stack catalog-content" }, h("p", { class: "muted" }, explanation), items.map((profile) => profileCard(profile, isRunning()))));
+          })),
+      );
+    }));
   };
 
   const profileCard = (profile, running) => {
@@ -684,17 +780,21 @@ async function renderModelSetup(version, focusEngine) {
       active && s.state === "running"
         ? h("span", { class: "badge running" }, "다운로드 진행 중")
         : profile.prepared
-          ? h("span", { class: "badge done" }, "모델 준비됨")
+          ? h("span", { class: "badge done" }, "모델 파일 준비됨")
           : active && s.state === "failed"
             ? h("span", { class: "badge failed" }, "다운로드 실패")
             : h("span", { class: "badge queued" }, "모델 미준비"),
     ];
     return h(
       "article",
-      { class: `profile ${active ? "active" : ""}` },
+      { class: `profile ${active ? "active" : ""}`, tabindex: "-1", "data-focus-key": `profile-${profile.id}` },
       h("div", { class: "row between" }, h("h4", {}, profile.label || profile.id), h("div", { class: "row" }, badges)),
-      profile.description ? h("p", { class: "muted" }, profile.description) : null,
+      h("p", { class: "muted" }, profile.purpose || profile.description),
+      profile.tradeoff ? h("p", { class: "muted" }, `선택 시 고려: ${profile.tradeoff}`) : null,
+      h("p", { class: "muted" }, "이 버튼은 모델 파일만 받습니다. 다음 번역의 OCR·지우기 옵션은 자동으로 바뀌지 않습니다."),
       role === "alternative" ? h("p", { class: "muted" }, "이 모델을 받을 때 같은 엔진의 기본 구성도 함께 확인하고 없으면 받습니다.") : null,
+      h("details", { "data-detail-key": `files-${profile.id}` },
+        h("summary", { "data-focus-key": `files-${profile.id}` }, "저장소·리비전·파일 상세"),
       h(
         "ul",
         { class: "models" },
@@ -711,14 +811,14 @@ async function renderModelSetup(version, focusEngine) {
       ),
       profile.missing?.length && !profile.prepared
         ? h("p", { class: "muted mono files" }, `없는 파일: ${fileSummary(profile.missing, 5)}`)
-        : null,
+        : null),
       h(
         "div",
         { class: "row" },
         h(
           "button",
-          { class: profile.prepared ? "secondary" : "", disabled: running, "aria-label": `${profile.label || profile.id} ${profile.prepared ? "다시 받기" : "모델 다운로드"}`, onclick: () => prepare(profile) },
-          profile.prepared ? "다시 받기" : "모델 다운로드",
+          { class: "secondary", disabled: running, "data-focus-key": `profile-${profile.id}-prepare`, "aria-label": `${profile.label || profile.id} ${profile.prepared ? "파일 다시 받기" : "파일 다운로드"}`, onclick: () => prepare(profile) },
+          profile.prepared ? "파일 다시 받기" : "파일 다운로드",
         ),
       ),
     );
@@ -793,9 +893,11 @@ async function renderModelSetup(version, focusEngine) {
     renderStatus();
     // Rebuild profile cards only when something they show changed, so polling
     // does not reset keyboard focus inside the list.
-    const key = JSON.stringify([setup.status?.state, setup.status?.profile_id, setup.profiles]);
+    const key = JSON.stringify([setup.status?.state, setup.status?.profile_id, setup.profiles, setup.recommendations, setup.platform]);
     if (key !== profilesKey) {
       profilesKey = key;
+      renderPlatform();
+      renderRecommendations();
       renderProfiles();
     }
     if (running) schedulePoll(2000);
@@ -804,24 +906,28 @@ async function renderModelSetup(version, focusEngine) {
   view.replaceChildren(
     h(
       "section",
-      { class: "card" },
+      { class: "card stack" },
       h("h2", {}, "모델 준비"),
-      h(
-        "p",
-        {},
-        "엔진 설치와 모델 다운로드는 별도 단계입니다. 설치 스크립트는 엔진만 설치하고 모델은 받지 않습니다. 이 화면에서 필요한 모델을 고르고 직접 다운로드를 시작할 때만 받습니다.",
-      ),
+      platformBanner,
+      h("p", {}, "처리 순서: 감지(글자·말풍선 위치 찾기) → OCR(글자 읽기) → 지우기(원문 제거·배경 복원) → 조판(번역문 배치). LLM은 별도 제공자로, OCR 텍스트를 번역하고 허용된 경우 이미지 문맥도 참고합니다."),
+      h("p", { class: "muted" }, "1. 서버에 맞는 엔진 설치 → 2. 선택한 조합의 필수 파일 다운로드 → 3. 새 번역에 옵션 적용. 모델 다운로드와 작업 옵션 선택은 별도입니다. 선택 모델을 전부 받을 필요는 없습니다."),
     ),
+    h("section", { class: "card stack", "aria-labelledby": "model-recommendations-title" },
+      h("h3", { id: "model-recommendations-title" }, "추천 조합"),
+      h("p", { class: "muted" }, "용도와 모델 특성에 따라 조합을 선택하세요. 이미지 문맥은 선택한 LLM 제공자의 이미지 입력 허용 여부에 따라 새 번역에서 적용됩니다."),
+      recommendationsBox,
+      h("a", { href: "#/new" }, "조합 없이 직접 새 번역 설정")),
     h("section", { class: "card narrow" }, h("h3", {}, "저장 위치와 토큰"), form),
     h("section", { class: "card", "aria-labelledby": "model-status-title" }, h("h3", { id: "model-status-title" }, "다운로드 상태"), statusLine, statusDetail),
-    h("section", { class: "card stack", "aria-labelledby": "model-profiles-title" }, h("h3", { id: "model-profiles-title" }, "모델 프로필"), profilesBox),
+    h("section", { class: "card stack", "aria-labelledby": "model-profiles-title" }, h("h3", { id: "model-profiles-title" }, "필수·선택 모델 카탈로그"), h("p", { class: "muted" }, "필요할 때만 펼쳐 보세요. 미지원 엔진의 보조 파일도 목록에는 남지만, 다운로드가 전체 엔진 설치나 사용 가능을 뜻하지는 않습니다."), profilesBox),
   );
   sync(setup);
   if (focusEngine) {
     const target = [...profilesBox.querySelectorAll(".engine-group")].find((el) => el.dataset.engine === focusEngine);
     if (target) {
+      target.open = true;
       target.scrollIntoView({ block: "start" });
-      target.focus({ preventScroll: true });
+      target.querySelector("summary").focus({ preventScroll: true });
     }
   }
 }

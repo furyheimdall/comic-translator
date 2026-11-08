@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import sys
 import stat
 import tempfile
 import threading
@@ -40,6 +42,9 @@ class Profile:
     description: str
     files: tuple[Artifact, ...]
     default: bool = False
+    category: str = "base"
+    purpose: str = ""
+    tradeoff: str = ""
 
 
 def files(repo: str, revision: str, *names: str) -> tuple[Artifact, ...]:
@@ -56,23 +61,92 @@ BASE = DETECTION + PADDLE + LAMA
 
 
 PROFILES = (
-    Profile("koharu-default", "koharu", "Koharu 기본 · 레이아웃 + PaddleOCR-VL 1.6 + LaMa", "기본 OCR/지우기 조합에 필요한 고정 모델 파일입니다. GPU 실행 가능 여부는 별도로 확인해야 합니다.", BASE, True),
-    Profile("koharu-ocr-manga-ocr", "koharu", "Koharu 추가 OCR · manga-ocr", "기본 구성과 함께 사용하는 추가 OCR입니다.", BASE + files("mayocream/manga-ocr", "4380edba990b959c508752350955350c1c80c31c", "config.json", "model.safetensors", "preprocessor_config.json", "vocab.txt")),
-    Profile("koharu-ocr-baberu-ocr", "koharu", "Koharu 추가 OCR · Baberu", "기본 구성과 함께 사용하는 추가 OCR입니다.", BASE + (*files("genshiai-daichi/baberu-ocr", "d9cc13153e9a1cd8fdfa3b7b1cc329da2020aeae", "config.json", "generation_config.json", "model.safetensors", "tokenizer/vocab.json"), *files("facebook/dinov2-base", "f9e44c814b77203eaa57a6bdbbd535f21ede1415", "config.json", "preprocessor_config.json"))),
-    Profile("koharu-ocr-hayai-ocr", "koharu", "Koharu 추가 OCR · Hayai", "기본 구성과 함께 사용하는 추가 OCR입니다.", BASE + files("JustANormalTinkerer/hayai-ocr-v2", "4a4ce477c9a8841f208b94e1d9ed5c0938965e05", "config.json", "model.safetensors", "tokenizer.json")),
-    Profile("koharu-inpainting-aot-inpainting", "koharu", "Koharu 추가 지우기 · AOT", "기본 구성과 함께 사용하는 추가 지우기 모델입니다.", BASE + files("mayocream/aot-inpainting", "cffe2346ac2b5ebe1f2d61335d602d12cc144c6f", "model.safetensors")),
-    Profile("koharu-inpainting-flux2-klein", "koharu", "Koharu 추가 지우기 · FLUX.2 Klein", "용량과 VRAM 사용량이 큰 선택 모델입니다.", BASE + (*files("unsloth/FLUX.2-klein-4B-GGUF", "0084d1df98e2e2137fe776d55170bc4792ec1d66", "flux-2-klein-4b-Q4_K_M.gguf"), *files("black-forest-labs/FLUX.2-small-decoder", "a3efc24f613ef42d9428af62fdbd6f5fd8856c4a", "full_encoder_small_decoder.safetensors"), *files("unsloth/Qwen3-4B-GGUF", "22c9fc8a8c7700b76a1789366280a6a5a1ad1120", "Qwen3-4B-Q4_K_M.gguf"))),
-    Profile("koharu-inpainting-rorem-mixed", "koharu", "Koharu 추가 지우기 · RORem", "라이선스/접근 제한이 있는 저장소는 Hugging Face에서 사용 조건에 동의하고 토큰을 등록해야 합니다.", BASE + (*files("mayocream/RORem-mixed-GGUF", "62c75b3e6f078a19e2698b0f677e8a4aa4c9ea56", "rorem-mixed-unet-q4_K.gguf", "sdxl-version-marker.safetensors"), *files("diffusers/stable-diffusion-xl-1.0-inpainting-0.1", "115134f363124c53c7d878647567d04daf26e41e", "vae/diffusion_pytorch_model.fp16.safetensors", "text_encoder/model.fp16.safetensors", "text_encoder_2/model.fp16.safetensors"))),
-    Profile("mt-bubble-detector", "mangatranslator", "MangaTranslator · YOLO 말풍선 감지", "알려진 단일 파일만 준비합니다. MT 전체 모델 준비 또는 오프라인 실행을 뜻하지 않습니다.", (Artifact("kitsumed/yolov8m_seg-speech-bubble", "main", "model.pt", "yolo/yolov8m_seg-speech-bubble.pt"),)),
-    Profile("mt-osb-detector", "mangatranslator", "MangaTranslator · 말풍선 밖 텍스트 감지", "OSB 사용 시 필요한 알려진 파일입니다. 다른 OCR/FLUX 모델은 실행 시 별도로 다운로드될 수 있습니다.", (Artifact("deepghs/AnimeText_yolo", "main", "yolo12x_animetext/model.pt", "yolo/animetext_yolov12x.pt"),)),
+    Profile("koharu-default", "koharu", "Koharu 기본 · 레이아웃 + PaddleOCR-VL 1.6 + LaMa", "Koharu 작업에 필요한 기본 묶음입니다. 영역 감지, 문자 읽기(OCR), 글자 지우기 모델을 준비합니다. 번역 LLM은 포함하지 않습니다.", BASE, True,
+            category="base", purpose="레이아웃과 글자 영역을 찾고 PaddleOCR-VL 1.6으로 읽은 뒤 LaMa로 지웁니다.",
+            tradeoff="일반적인 시작 조합입니다. 파일 준비는 GPU 실행 확인이 아니며 번역 LLM은 별도 서비스로 연결해야 합니다."),
+    Profile("koharu-ocr-manga-ocr", "koharu", "Koharu 추가 OCR · manga-ocr", "기본 묶음과 일본어 만화용 추가 OCR을 함께 준비합니다.", BASE + files("mayocream/manga-ocr", "4380edba990b959c508752350955350c1c80c31c", "config.json", "model.safetensors", "preprocessor_config.json", "vocab.txt"),
+            category="ocr", purpose="일본어 만화 글자를 읽는 대체 OCR입니다.",
+            tradeoff="일본어 중심 작업에서 선택하는 옵션이며 다른 언어까지 포괄하는 기본 권장 OCR은 아닙니다."),
+    Profile("koharu-ocr-baberu-ocr", "koharu", "Koharu 추가 OCR · Baberu", "기본 묶음과 일본어 중심의 추가 OCR을 함께 준비합니다.", BASE + (*files("genshiai-daichi/baberu-ocr", "d9cc13153e9a1cd8fdfa3b7b1cc329da2020aeae", "config.json", "generation_config.json", "model.safetensors", "tokenizer/vocab.json"), *files("facebook/dinov2-base", "f9e44c814b77203eaa57a6bdbbd535f21ede1415", "config.json", "preprocessor_config.json")),
+            category="ocr", purpose="일본어 만화 OCR을 바꾸어 사용할 때 선택합니다.",
+            tradeoff="선택한 경우에만 추가 파일이 필요합니다. 입력 언어에 맞는지 확인하고 사용하세요."),
+    Profile("koharu-ocr-hayai-ocr", "koharu", "Koharu 추가 OCR · Hayai", "기본 묶음과 일본어 중심의 추가 OCR을 함께 준비합니다.", BASE + files("JustANormalTinkerer/hayai-ocr-v2", "4a4ce477c9a8841f208b94e1d9ed5c0938965e05", "config.json", "model.safetensors", "tokenizer.json"),
+            category="ocr", purpose="일본어 만화 OCR의 다른 선택지입니다.",
+            tradeoff="선택한 경우에만 추가 파일이 필요합니다. 일반 작업은 기본 OCR로 시작할 수 있습니다."),
+    Profile("koharu-inpainting-aot-inpainting", "koharu", "Koharu 추가 지우기 · AOT", "기본 묶음과 선택형 AOT 지우기 모델을 함께 준비합니다.", BASE + files("mayocream/aot-inpainting", "cffe2346ac2b5ebe1f2d61335d602d12cc144c6f", "model.safetensors"),
+            category="inpainting", purpose="글자를 지운 자리를 채우는 대체 모델입니다.",
+            tradeoff="기본 LaMa 대신 선택할 때만 필요하며 지우는 영역과 배경에 따라 결과가 달라집니다."),
+    Profile("koharu-inpainting-flux2-klein", "koharu", "Koharu 추가 지우기 · FLUX.2 Klein", "기본 묶음과 FLUX.2 Klein 생성형 복원 모델을 함께 준비합니다.", BASE + (*files("unsloth/FLUX.2-klein-4B-GGUF", "0084d1df98e2e2137fe776d55170bc4792ec1d66", "flux-2-klein-4b-Q4_K_M.gguf"), *files("black-forest-labs/FLUX.2-small-decoder", "a3efc24f613ef42d9428af62fdbd6f5fd8856c4a", "full_encoder_small_decoder.safetensors"), *files("unsloth/Qwen3-4B-GGUF", "22c9fc8a8c7700b76a1789366280a6a5a1ad1120", "Qwen3-4B-Q4_K_M.gguf")),
+            category="inpainting", purpose="글자를 지운 배경을 생성 방식으로 복원하는 선택 모델입니다.",
+            tradeoff="LaMa보다 추가 생성 연산과 저장 공간·GPU 메모리가 필요합니다. 원래 그림과 다른 내용이 생길 수 있어 결과를 확인해야 합니다."),
+    Profile("koharu-inpainting-rorem-mixed", "koharu", "Koharu 추가 지우기 · RORem", "기본 묶음과 SDXL 기반 RORem 생성형 지우기 모델을 함께 준비합니다.", BASE + (*files("mayocream/RORem-mixed-GGUF", "62c75b3e6f078a19e2698b0f677e8a4aa4c9ea56", "rorem-mixed-unet-q4_K.gguf", "sdxl-version-marker.safetensors"), *files("diffusers/stable-diffusion-xl-1.0-inpainting-0.1", "115134f363124c53c7d878647567d04daf26e41e", "vae/diffusion_pytorch_model.fp16.safetensors", "text_encoder/model.fp16.safetensors", "text_encoder_2/model.fp16.safetensors")),
+            category="inpainting", purpose="SDXL 생성 모델로 글자를 지운 영역을 다시 그립니다.",
+            tradeoff="추가 연산·메모리가 필요하며 원화의 내용이 바뀔 수 있습니다. 각 저장소의 라이선스와 사용 조건을 확인하세요. 접근 제한이 있으면 Hugging Face에서 동의 후 토큰을 등록해야 합니다."),
+    Profile("mt-bubble-detector", "mangatranslator", "MangaTranslator · YOLO 말풍선 감지", "알려진 단일 파일만 준비합니다. MT 전체 모델 준비 또는 오프라인 실행을 뜻하지 않습니다.", (Artifact("kitsumed/yolov8m_seg-speech-bubble", "main", "model.pt", "yolo/yolov8m_seg-speech-bubble.pt"),),
+            category="supplemental", purpose="MangaTranslator에서 말풍선 영역을 찾는 보조 모델입니다.",
+            tradeoff="이 파일만으로 실행 준비가 끝나지 않습니다. OCR·지우기 등 다른 파일은 실행 중 별도로 받을 수 있습니다."),
+    Profile("mt-osb-detector", "mangatranslator", "MangaTranslator · 말풍선 밖 텍스트 감지", "OSB 사용 시 필요한 알려진 파일입니다. 다른 OCR/FLUX 모델은 실행 시 별도로 다운로드될 수 있습니다.", (Artifact("deepghs/AnimeText_yolo", "main", "yolo12x_animetext/model.pt", "yolo/animetext_yolov12x.pt"),),
+            category="supplemental", purpose="MangaTranslator에서 말풍선 밖 글자를 찾는 보조 모델입니다.",
+            tradeoff="말풍선 밖 글자 처리 옵션에 사용하는 일부 파일입니다. 전체 모델 준비나 오프라인 실행을 보장하지 않습니다."),
 )
 PROFILE_BY_ID = {profile.id: profile for profile in PROFILES}
 
 
+def server_platform() -> dict[str, Any]:
+    """Describe supported setup paths, not detected GPU hardware."""
+    if sys.platform == "darwin":
+        if platform.machine().lower() == "arm64":
+            return {
+                "id": "macos-arm64", "label": "Apple Silicon Mac", "accelerator": "metal",
+                "description": "현재 서버는 Apple Silicon 네이티브 macOS입니다. Koharu의 Metal 경로만 지원하며 MangaTranslator의 CUDA 설치 경로는 지원하지 않습니다. 실제 GPU 실행 여부는 별도로 확인해야 합니다.",
+                "supported_engines": ["koharu"],
+            }
+        return {
+            "id": "macos-unsupported", "label": "Intel / Rosetta Mac", "accelerator": "none",
+            "description": "현재 서버는 Intel 또는 Rosetta 환경의 macOS입니다. 지원되는 실행 엔진이 없으며 Koharu는 Apple Silicon arm64 네이티브 환경이 필요합니다.",
+            "supported_engines": [],
+        }
+    if sys.platform == "linux":
+        return {
+            "id": "linux", "label": "Linux · NVIDIA CUDA 설치 경로", "accelerator": "cuda",
+            "description": "현재 서버는 Linux입니다. Koharu와 MangaTranslator의 NVIDIA CUDA 설치 경로를 지원합니다. GPU나 드라이버를 감지한 결과가 아니며 실제 실행 조건은 별도로 확인해야 합니다.",
+            "supported_engines": ["koharu", "mangatranslator"],
+        }
+    return {
+        "id": "unsupported", "label": "지원하지 않는 서버 OS", "accelerator": "none",
+        "description": "현재 서버 OS에는 지원되는 실행 엔진이 없습니다. Apple Silicon 네이티브 macOS 또는 NVIDIA CUDA 환경의 Linux 서버를 사용하세요.",
+        "supported_engines": [],
+    }
+
+
+RECOMMENDATIONS = (
+    {
+        "id": "koharu-standard", "label": "기본 번역 · PaddleOCR-VL + LaMa",
+        "description": "일반 작업을 시작하는 기본 조합입니다. 글자를 읽고 지운 뒤 별도로 연결한 LLM으로 번역합니다.",
+        "engine": "koharu", "profile_id": "koharu-default",
+        "options": {"ocr": "paddleocr-vl-1.6", "inpainting": "lama", "vision": True},
+        "notes": [
+            "기본 묶음만 준비하면 됩니다. 다른 OCR·지우기 모델은 선택한 경우에만 추가로 필요합니다.",
+        ],
+    },
+    {
+        "id": "koharu-restoration", "label": "선택형 배경 복원 · PaddleOCR-VL + FLUX.2 Klein",
+        "description": "글자를 지운 배경을 생성 방식으로 복원하고 싶을 때 선택하는 조합입니다. 기본 작업의 필수 준비는 아닙니다.",
+        "engine": "koharu", "profile_id": "koharu-inpainting-flux2-klein",
+        "options": {"ocr": "paddleocr-vl-1.6", "inpainting": "flux2-klein", "vision": True},
+        "notes": [
+            "이 묶음에는 기본 모델과 FLUX.2 Klein에 필요한 추가 파일이 함께 들어 있습니다.",
+            "LaMa보다 추가 생성 연산과 저장 공간·GPU 메모리가 필요하며 원래 그림과 다른 내용이 생길 수 있습니다.",
+        ],
+    },
+)
+
+
 def default_cache() -> Path:
-    """Keep the existing Rust dirs::cache_dir()/koharu/packages location."""
+    """Match Koharu's native cache, with an explicit XDG override on either OS."""
     xdg = os.environ.get("XDG_CACHE_HOME", "")
-    return (Path(xdg) if xdg and Path(xdg).is_absolute() else Path.home() / ".cache").resolve()
+    native = Path.home() / ("Library/Caches" if sys.platform == "darwin" else ".cache")
+    return (Path(xdg) if xdg and Path(xdg).is_absolute() else native).resolve()
 
 
 def artifact_path(artifact: Artifact, cache: Path, settings: Settings) -> Path:
@@ -143,9 +217,14 @@ class ModelSetup:
     def environment(self, engine: str) -> dict[str, str]:
         cache = self.cache_dir()
         # Until a path is explicitly saved, preserve a legacy HF_HOME used by
-        # an existing MangaTranslator installation. Rust uses XDG_CACHE_HOME.
+        # an existing MangaTranslator installation. Configure Koharu explicitly:
+        # macOS dirs::cache_dir() does not honor XDG_CACHE_HOME.
         legacy_hf_home = os.environ.get("HF_HOME") if self._row()["cache_dir"] is None else None
-        env = {"XDG_CACHE_HOME": str(cache), "HF_HOME": legacy_hf_home or str(cache / "huggingface")}
+        env = {
+            "XDG_CACHE_HOME": str(cache),
+            "CT_KOHARU_CACHE_DIR": str(cache / "koharu" / "packages"),
+            "HF_HOME": legacy_hf_home or str(cache / "huggingface"),
+        }
         token = self.token()
         if token:
             env["HF_TOKEN"] = token
@@ -166,7 +245,15 @@ class ModelSetup:
             source = ("saved" if row["token"] is not None else
                       "env" if os.environ.get("HF_TOKEN") else "file") if effective_token else None
             readiness: dict[Path, bool] = {}
-            installed = {engine: instance.availability()[0] for engine, instance in self.engines.items()}
+            host = server_platform()
+            installed = {engine: instance.availability() for engine, instance in self.engines.items()}
+            support: dict[str, tuple[bool, str]] = {}
+            for engine in {profile.engine for profile in PROFILES}:
+                engine_installed, reason = installed.get(engine, (False, "실행 엔진이 등록되어 있지 않습니다."))
+                if engine not in host["supported_engines"]:
+                    support[engine] = False, host["description"]
+                else:
+                    support[engine] = engine_installed, "" if engine_installed else (reason or "실행 엔진을 먼저 설치하세요.")
             profiles = []
             for profile in PROFILES:
                 models: dict[tuple[str, str], dict[str, Any]] = {}
@@ -179,7 +266,27 @@ class ModelSetup:
                         readiness[path] = _ready(path)
                     if not readiness[path]:
                         missing.append(f"{artifact.repo}/{artifact.filename}")
-                profiles.append({"id": profile.id, "engine": profile.engine, "label": profile.label, "description": profile.description, "default": profile.default, "supplemental": profile.engine == "mangatranslator", "engine_installed": installed[profile.engine], "models": list(models.values()), "prepared": not missing, "missing": missing})
+                available, reason = support[profile.engine]
+                profiles.append({
+                    "id": profile.id, "engine": profile.engine, "label": profile.label,
+                    "description": profile.description, "default": profile.default,
+                    "category": profile.category, "purpose": profile.purpose, "tradeoff": profile.tradeoff,
+                    "supplemental": profile.engine == "mangatranslator",
+                    "engine_installed": installed.get(profile.engine, (False, ""))[0],
+                    "available": available, "reason": reason,
+                    "models": list(models.values()), "prepared": not missing, "missing": missing,
+                })
+            profile_states = {profile["id"]: profile for profile in profiles}
+            recommendations = []
+            for recommendation in RECOMMENDATIONS:
+                available, reason = support[recommendation["engine"]]
+                recommendations.append({
+                    **recommendation,
+                    "options": recommendation["options"].copy(),
+                    "notes": list(recommendation["notes"]),
+                    "available": available, "reason": reason,
+                    "prepared": profile_states[recommendation["profile_id"]]["prepared"],
+                })
             legacy_hf_home = os.environ.get("HF_HOME") if row["cache_dir"] is None else None
             return {
                 "cache_dir": str(cache),
@@ -189,6 +296,8 @@ class ModelSetup:
                 "token_source": source,
                 "status": self._status.copy(),
                 "profiles": profiles,
+                "platform": host,
+                "recommendations": recommendations,
             }
 
     def require_prepared_for_new_job(self, options: dict[str, Any]) -> None:

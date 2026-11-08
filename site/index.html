@@ -74,16 +74,19 @@
 
     <section class="section" id="install" aria-labelledby="install-title">
       <div class="container split">
-        <div class="section-heading"><p class="kicker">03 / 시작하기</p><h2 id="install-title">Linux 서버에 설치합니다.</h2><p>Python 3.12 이상과 uv, 엔진별 의존성이 필요합니다. 설치기는 systemd 사용자 서비스를 등록하지만 별도 옵션 없이는 시작하거나 자동 시작을 켜지 않습니다. systemd 사용자 서비스나 세션 버스가 없다면 <code>--no-systemd</code>로 설치해 수동 실행기로 실행하세요. 소스 패키지에는 모델·폰트·GPU 엔진이 들어 있지 않으며, 선택한 엔진은 설치 과정에서 받아 설치합니다.</p><p>GPU 번역을 실제 확인한 조합은 Ubuntu 24.04/aarch64, NVIDIA GB10(DGX Spark), 드라이버 580, CUDA 13.0입니다. 다른 Linux·GPU 조합에서도 설치는 시도할 수 있지만 엔진 실행은 별도 검증이 필요합니다.</p><a class="text-link" href="https://github.com/furyheimdall/comic-translator#%EC%A7%80%EC%9B%90-%ED%99%98%EA%B2%BD%EA%B3%BC-%EC%A4%80%EB%B9%84%EB%AC%BC">지원 환경과 준비물 확인 <span aria-hidden="true">↗</span></a></div>
+        <div class="section-heading"><p class="kicker">03 / 시작하기</p><h2 id="install-title">Linux · Apple Silicon Mac에 설치합니다.</h2><p>Python 3.12 이상과 uv, 엔진별 의존성이 필요합니다. Linux는 systemd 사용자 서비스를 등록하며, systemd나 세션 버스가 없다면 <code>--no-systemd</code>를 사용합니다. macOS는 수동 실행기만 생성하고 launchd에 자동 등록하지 않습니다. 설치만으로 서비스를 시작하거나 자동 시작을 켜지는 않습니다. 소스 패키지에는 모델·폰트·GPU 엔진이 들어 있지 않으며, 선택한 엔진은 설치 과정에서 받아 설치합니다.</p><p>Apple Silicon 네이티브 macOS에서는 Koharu의 Metal 경로를 사용합니다. MangaTranslator는 Linux/NVIDIA CUDA 설치 경로로 제한됩니다. Intel Mac·Rosetta 엔진 실행과 Windows 설치는 지원하지 않습니다.</p><p>기존 Linux GPU 번역 검증 환경은 Ubuntu 24.04/aarch64, NVIDIA GB10(DGX Spark), 드라이버 580, CUDA 13.0입니다. 다른 장비·모델 조합의 엔진 실행은 별도 확인이 필요합니다.</p><a class="text-link" href="https://github.com/furyheimdall/comic-translator#%EC%A7%80%EC%9B%90-%ED%99%98%EA%B2%BD%EA%B3%BC-%EC%A4%80%EB%B9%84%EB%AC%BC">플랫폼별 준비물·메모리 계획 기준 확인 <span aria-hidden="true">↗</span></a></div>
         <div class="install-panel"><p class="panel-label">로컬 설치 · 기본 127.0.0.1:18710</p><pre><code>git clone https://github.com/furyheimdall/comic-translator.git
 cd comic-translator
 python3 scripts/install.py --engine koharu
-systemctl --user start comic-translator</code></pre><p>서버 웹 UI에서 모델을 준비하고 LLM 제공자를 연결한 뒤 원고를 올리세요. 다른 기기에서 접속하려면 설치 시 바인딩 주소를 <code>0.0.0.0</code>으로 두고 로그인 비밀번호를 설정해야 합니다.</p></div>
+# Linux + systemd
+systemctl --user start comic-translator
+# macOS 또는 systemd 미사용 시 위 명령 대신:
+python3 "$HOME/.config/comic-translator/run.py"</code></pre><p>서버 웹 UI의 모델 준비에서 플랫폼과 추천 조합을 확인하고, 필요한 파일을 받은 뒤 LLM 제공자를 연결하세요. 다른 기기에서 접속하려면 설치 시 바인딩 주소를 <code>0.0.0.0</code>으로 두고 로그인 비밀번호를 설정해야 합니다.</p></div>
       </div>
       <div class="container hardware" id="hardware" aria-labelledby="hardware-title">
         <p class="kicker">메모리 사양</p>
         <h3 id="hardware-title">번역 전에 남겨 둘 메모리</h3>
-        <p>표의 설치 최소치는 엔진 설치 전에 현재 가용 메모리와 비교하는 값입니다. 부족하거나 확인할 수 없다면 웹 앱만 설치하는 <code>--engine none</code> 외에는 진행하지 않습니다. 권장 여유는 기본 모델로 번역하기 전에 확보할 계획값이며, 모든 GPU·모델의 실행을 보장하지는 않습니다.</p>
+        <p>아래 표는 Linux/NVIDIA 설치 경로의 가용량 기준입니다. 표의 설치 최소치보다 부족하거나 확인할 수 없다면 웹 앱만 설치하는 <code>--engine none</code> 외에는 진행하지 않습니다. 권장 여유는 기본 모델로 번역하기 전에 확보할 계획값이며, 모든 GPU·모델의 실행을 보장하지는 않습니다. Mac의 통합메모리 계획 기준과 준비물은 위 지원 환경 문서에서 별도로 확인하세요.</p>
         <div class="table-scroll">
           <table class="spec-table">
             <caption>설치 최소치와 번역 전 권장 여유 (GiB)</caption>

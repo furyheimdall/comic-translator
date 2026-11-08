@@ -2,6 +2,11 @@
 # Install MangaTranslator (pinned) into its own venv plus the Korean font pack.
 set -euo pipefail
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "MangaTranslator setup is CUDA-only. On Apple Silicon use: bash scripts/setup_koharu.sh" >&2
+    exit 1
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MT_TAG="${MT_TAG:-v1.24.7}"
 MT_DIR="$ROOT/engines/mangatranslator"

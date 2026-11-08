@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import signal
 import subprocess
 import threading
@@ -245,6 +246,8 @@ class MangaTranslatorEngine(Engine):
     )
 
     def availability(self) -> tuple[bool, str]:
+        if platform.system() == "Darwin":
+            return False, "macOS에서는 Koharu의 Metal 백엔드를 사용하세요. MangaTranslator 설치 경로는 CUDA 전용입니다."
         if not self.settings.mt_python.exists():
             return False, "scripts/setup_mangatranslator.sh 를 먼저 실행하세요."
         if not self._font_pack():
@@ -308,7 +311,7 @@ class KoharuEngine(Engine):
     id = "koharu"
     name = "Koharu"
     supports_live = True
-    description = "Rust · RF-DETR 레이아웃 + Comic Text Detector 글자 검출 + PaddleOCR-VL/manga-ocr + LaMa/FLUX.2 Klein + Vello 식자"
+    description = "Rust · Apple Silicon Metal / NVIDIA CUDA · RF-DETR + Comic Text Detector + PaddleOCR-VL/manga-ocr + LaMa/FLUX.2 Klein + Vello 식자"
     options = (
         EngineOption(
             "ocr",
@@ -322,12 +325,14 @@ class KoharuEngine(Engine):
             "지우기 모델",
             "select",
             "lama",
-            (("lama", "LaMa (만화 전용, 빠름)"), ("flux2-klein", "FLUX.2 Klein (고품질)"), ("rorem-mixed", "RORem"), ("aot-inpainting", "AOT-GAN")),
+            (("lama", "LaMa (만화용 기본 복원)"), ("flux2-klein", "FLUX.2 Klein (생성형 복원)"), ("rorem-mixed", "RORem (SDXL 기반 복원)"), ("aot-inpainting", "AOT-GAN")),
         ),
         EngineOption("vision", "페이지 이미지를 LLM에 전달", "bool", False, help="비전 지원 모델에서만 켜세요."),
     )
 
     def availability(self) -> tuple[bool, str]:
+        if platform.system() == "Darwin" and platform.machine() != "arm64":
+            return False, "macOS Koharu는 Apple Silicon(arm64) 네이티브 실행이 필요합니다."
         if not self.settings.koharu_bin.exists():
             return False, "scripts/setup_koharu.sh 를 먼저 실행하세요."
         return True, ""

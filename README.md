@@ -15,7 +15,7 @@
 **저장소:** <https://github.com/furyheimdall/comic-translator>
 **소개 페이지:** <https://furyheimdall.github.io/comic-translator/>
 
-이 배포물은 **Linux 소스 설치 패키지**입니다. 웹 앱·설치기·엔진 연동 코드가 포함되며, GPU 엔진·모델·폰트는 선택한 설치 과정에서 별도로 받습니다. 독립 실행 바이너리, Docker 이미지, 모델이 포함된 오프라인 패키지 또는 Python wheel 배포물이 아닙니다.
+이 소스 설치 패키지는 **Linux/NVIDIA와 Apple Silicon macOS/Koharu Metal** 실행 경로를 제공합니다. 웹 앱·설치기·엔진 연동 코드가 포함되며, GPU 엔진·모델·폰트는 별도로 준비합니다. 독립 실행 바이너리, Docker 이미지, 모델이 포함된 오프라인 패키지 또는 Python wheel 배포물이 아닙니다.
 
 ## 주요 기능
 
@@ -31,14 +31,15 @@ Koharu는 RF-DETR로 말풍선·컷·효과음을, Comic Text Detector로 본문
 
 ## 지원 환경과 준비물
 
-Linux용 설치기입니다. GPU 번역을 실제 확인한 조합은 **Ubuntu 24.04/aarch64, NVIDIA GB10(DGX Spark), 드라이버 580, CUDA 13.0**입니다. 이 기기만 설치할 수 있다는 뜻은 아니지만 다른 Linux·GPU 조합의 엔진 실행은 별도 검증이 필요합니다. Windows/macOS용 서비스 설치는 지원하지 않습니다.
+Linux/NVIDIA 경로와 Apple Silicon Mac의 Koharu Metal 경로를 제공합니다. 기존 GPU 번역 검증 조합은 **Ubuntu 24.04/aarch64, NVIDIA GB10(DGX Spark), 드라이버 580, CUDA 13.0**입니다. macOS에서는 고정된 [Koharu 0.83.5의 Metal 지원](https://github.com/koharu-rs/koharu/tree/0.83.5#hardware-acceleration)을 재사용하며, 별도 엔진 ID 없이 기존 작업·실시간 번역 경로를 유지합니다. Intel Mac·Rosetta 엔진 실행과 Windows 설치는 지원하지 않습니다.
 
 | 구분 | 필요 항목 |
 |---|---|
 | 웹 앱 | Python 3.12 이상, [uv](https://docs.astral.sh/uv/getting-started/installation/), Git |
-| 서비스 등록 | systemd 사용자 서비스와 사용자 세션 버스. 없으면 `--no-systemd` 사용 |
-| Koharu | [rustup](https://rustup.rs/), C/C++ 빌드 도구, pkg-config, libclang, fontconfig, 한국어 시스템 폰트, 호환 NVIDIA 드라이버 |
-| MangaTranslator | uv가 관리하는 Python 3.13, CUDA 13.0 호환 PyTorch, 다운로드·빌드에 필요한 도구 |
+| 서비스 등록 | Linux: systemd 사용자 서비스. 없으면 `--no-systemd`. macOS: 수동 실행기만 생성, launchd 등록 없음 |
+| Koharu (Linux) | [rustup](https://rustup.rs/), C/C++ 빌드 도구, pkg-config, libclang, fontconfig, 한국어 시스템 폰트, 호환 NVIDIA 드라이버 |
+| Koharu (macOS) | 네이티브 arm64 Python/Rust, Xcode Command Line Tools의 SDK·libclang, pkg-config, 한국어 시스템 폰트. NVIDIA/CUDA 불필요 |
+| MangaTranslator | Linux/NVIDIA 전용 설치 경로. uv가 관리하는 Python 3.13, CUDA 13.0 호환 PyTorch |
 | 다운로드 | GitHub·Python 패키지 저장소·모델 저장소에 연결 가능한 네트워크와 충분한 저장 공간 |
 | 번역 | LLM 제공자 계정/API 키 또는 별도로 실행 중인 OpenAI 호환 LLM 서버 |
 
@@ -49,13 +50,36 @@ sudo apt-get update
 sudo apt-get install -y git curl build-essential pkg-config libclang-dev libfontconfig1-dev fonts-noto-cjk
 ```
 
-uv와 rustup은 위 공식 설치 문서를 따라 준비하세요. 설치기는 엔진 설치 전에 전용 GPU의 가용 VRAM 또는 지원하는 통합 GPU의 가용 시스템 RAM을 검사합니다. 수치 확인에 실패하거나 필요한 여유가 부족하면 웹 앱만 설치하는 `--engine none` 외에는 진행하지 않습니다. 이 검사는 현재 가용량에 대한 설치 전 최소 조건으로, 나중의 모델 추론 성능이나 로컬 LLM 동시 실행 가능성을 보장하지 않습니다. 모델 가중치는 설치 시 다운로드하지 않으며 앱의 **모델 준비** 화면에서 사용자가 명시적으로 선택합니다. CUDA/Torch 런타임과 엔진 의존성은 엔진 설치 단계에 다운로드될 수 있습니다.
+uv와 rustup은 위 공식 설치 문서를 따라 준비하세요. Linux 설치기는 엔진 설치 전에 전용 GPU의 가용 VRAM 또는 지원하는 통합 GPU의 가용 시스템 RAM을 검사합니다. 수치 확인에 실패하거나 필요한 여유가 부족하면 웹 앱만 설치하는 `--engine none` 외에는 진행하지 않습니다. 이 검사는 현재 가용량에 대한 설치 전 최소 조건으로, 나중의 모델 추론 성능이나 로컬 LLM 동시 실행 가능성을 보장하지 않습니다. 모델 가중치는 설치 시 다운로드하지 않으며 앱의 **모델 준비** 화면에서 사용자가 명시적으로 선택합니다. 플랫폼별 Torch/추론 런타임은 첫 엔진 실행 시 추가 다운로드될 수 있습니다.
 
 설치 전 최소 **가용량** 기준: 전용 VRAM은 Koharu 8 GiB / MangaTranslator 또는 둘 다 16 GiB, **GB10·GH200으로 식별된 통합메모리 GPU**는 Koharu 12 GiB / MangaTranslator 또는 둘 다 24 GiB입니다. 각 엔진은 별도 작업 프로세스로 순차 실행되므로 두 엔진의 사용량을 합산하지 않습니다. 여러 전용 GPU의 여유 VRAM은 합산하지 않고 한 GPU가 기준을 충족해야 합니다. 통합 GPU에서는 `nvidia-smi`가 VRAM 수치를 제공하지 않으므로 `/proc/meminfo`의 `MemAvailable`을 확인합니다. 이 값은 모델별 최대 요구량이 아니라 **기본 구성 설치를 시도하기 위한 보수적인 문턱값**입니다. 동시 LLM, FLUX 9B 같은 추가 옵션과 이후 메모리 사용 변화는 별도로 고려해야 합니다.
 
 기본 모델을 쓸 때 **작업 전에 확보해 둘 권장 여유량**은 전용 GPU 한 장의 VRAM 기준 Koharu 16 GiB / MangaTranslator 또는 둘 다 24 GiB, GB10·GH200 통합메모리의 `MemAvailable` 기준 Koharu 24 GiB / MangaTranslator 또는 둘 다 32 GiB입니다. 설치기가 검사하는 최소치보다 여유를 둔 계획값이며 다른 GPU나 추가 모델에서의 성공을 보증하는 실측 요구량은 아닙니다. 로컬 LLM은 해당 모델의 메모리 사용량을 별도로 더해 계획하세요. [소개 페이지의 메모리 표](https://furyheimdall.github.io/comic-translator/#hardware)에서 설치 최소치와 권장 여유를 함께 볼 수 있습니다.
 
 실제 검증 장비는 **128 GB 통합메모리의 DGX Spark(GB10)**입니다. 완료된 Koharu 작업에서 가용 메모리 약 10 GiB 변동이 관찰됐지만 이는 작업의 최대 메모리 요구량 실측은 아닙니다. 2026-10-13에는 번역 서비스를 실행하지 않은 상태에서 로컬 LLM만 GPU 메모리 약 93.7 GiB를 사용했고 시스템 가용량은 약 14.6 GiB, 스왑 사용량은 약 8.9 GiB였습니다. 로컬 LLM과 번역을 동시에 돌린 값이 아니며, 당시 여유량은 Koharu 설치 최소치 12 GiB를 넘지만 위 권장치 24 GiB에는 못 미쳤습니다.
+
+### Apple Silicon Mac 준비
+
+```bash
+# Command Line Tools가 없다면 설치하고 완료될 때까지 기다립니다.
+xcode-select --install
+brew install uv pkgconf
+brew install --cask font-noto-sans-cjk-kr
+# rustup은 위 공식 안내로 설치한 뒤, 현재 터미널에서도 사용할 수 있게 합니다.
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Mac에서는 `--engine koharu` 또는 웹 전용 `--engine none`을 사용하세요. `mangatranslator`/`both`는 CUDA 전용이므로 설치 전에 거부합니다. 설치기의 Mac 계획 기준은 **전체 통합메모리 16 GiB 이상**입니다. 이는 실측된 모델 최소 요구량이나 추론 성공 보장이 아닙니다. `sysctl hw.memsize`와 `vm_stat`의 페이지 크기·free+inactive를 표시하지만, 가용량 추정치는 참고용이며 압축 메모리·스왑을 여유로 합산하지 않습니다. 메모리가 빠듯하면 다른 앱과 로컬 LLM을 종료하고 기본 PaddleOCR-VL + LaMa 조합부터 확인하세요. FLUX 및 추가 OCR 조합은 별도 검증이 필요합니다.
+
+신규 소스 디렉터리에서는 아래 공통 설치 명령을 쓰고 `python3 "$HOME/.config/comic-translator/run.py"`로 실행합니다. macOS에서는 자동으로 수동 실행기를 선택하며 `--enable`/`--start`는 사용할 수 없습니다.
+
+이미 이 소스에서 `uv sync`로 가상환경을 만든 개발 환경이라면, 덮어쓰기를 거부하는 신규 설치기 대신 다음 경로를 사용합니다.
+
+```bash
+bash scripts/setup_koharu.sh
+CT_DATA_DIR="$HOME/.local/share/comic-translator" uv run python -m app.main
+```
+
 
 ## 빠른 설치
 
@@ -74,7 +98,7 @@ cd comic-translator
 python3 scripts/install.py --engine koharu
 ```
 
-기본값은 `127.0.0.1:18710`이며, 같은 컴퓨터에서만 접속할 수 있습니다. 설치기는 잠금 파일에 맞춰 앱 환경을 구성하고, 선택한 엔진을 설치한 뒤 환경 파일·실행기·systemd 사용자 유닛을 생성합니다. **기본적으로 서비스를 시작하거나 자동 시작을 활성화하지 않습니다.**
+기본값은 `127.0.0.1:18710`이며, 같은 컴퓨터에서만 접속할 수 있습니다. 설치기는 잠금 파일에 맞춰 앱 환경을 구성하고, 선택한 엔진을 설치한 뒤 환경 파일·수동 실행기를 생성합니다. Linux에서는 기본적으로 systemd 사용자 유닛도 생성합니다. **서비스를 시작하거나 자동 시작을 활성화하지는 않습니다.**
 
 기본 저장 위치:
 
@@ -84,13 +108,13 @@ python3 scripts/install.py --engine koharu
 | DB·원고·번역 결과·작업 로그 | `~/.local/share/comic-translator/` |
 | 실제 환경 설정 | `~/.config/comic-translator/env` (0600) |
 | 수동 실행기 | `~/.config/comic-translator/run.py` |
-| systemd 사용자 유닛 | `~/.config/systemd/user/comic-translator.service` |
+| systemd 사용자 유닛 (Linux만) | `~/.config/systemd/user/comic-translator.service` |
 
-설정·데이터 경로는 각 옵션으로 바꿀 수 있습니다. 모델 캐시는 앱에서 설정하며 기본 위치는 `~/.cache` 아래 엔진별 캐시입니다. 기존 서비스에서 `HF_HOME`을 따로 지정했다면 Hugging Face 캐시와 Koharu 패키지 캐시의 실제 경로가 서로 다를 수 있으며, 앱의 **모델 준비 → 실제 사용 위치**에 둘 다 표시됩니다. 토큰만 저장할 때는 기존 `HF_HOME`을 유지하고, 모델 저장 위치를 변경하면 이후 다운로드와 작업에 새 위치를 사용합니다. 위치를 변경해도 이전 캐시의 파일을 자동으로 옮기지 않습니다. 유닛 위치는 `XDG_CONFIG_HOME`도 따르며, 설치기가 출력하는 실제 경로를 확인하세요. 기존 환경 파일·실행기·유닛·소스 가상환경이 있거나 데이터 디렉터리가 비어 있지 않으면 덮어쓰지 않고 중단합니다. 현재 서빙 중인 디렉터리에 새 설치기를 실행하지 말고, 별도의 소스·데이터 디렉터리에서 검증하세요.
+설정·데이터 경로는 각 옵션으로 바꿀 수 있습니다. 모델 캐시는 앱에서 설정하며 기본 위치는 Linux `~/.cache`, macOS `~/Library/Caches` 아래입니다. 절대 경로의 `XDG_CACHE_HOME`도 양쪽에서 사용할 수 있습니다. Koharu에는 `CT_KOHARU_CACHE_DIR`로 실제 패키지 경로를 명시적으로 전달하므로 macOS에서도 모델 준비와 추론이 같은 저장소를 사용합니다. 기존 `HF_HOME`은 모델 위치를 저장하기 전까지 유지합니다. 앱의 **모델 준비 → 실제 사용 위치**에서 두 캐시를 확인하세요. 위치를 바꿔도 이전 파일은 자동으로 옮기지 않습니다. Linux 유닛 위치는 `XDG_CONFIG_HOME`도 따릅니다. 기존 환경 파일·실행기·유닛·소스 가상환경이 있거나 데이터 디렉터리가 비어 있지 않으면 덮어쓰지 않고 중단합니다. 현재 서빙 중인 디렉터리에 신규 설치기를 실행하지 마세요.
 
 ### 3. 실행
 
-systemd로 실행:
+Linux에서 systemd로 실행:
 
 ```bash
 systemctl --user start comic-translator
@@ -105,9 +129,9 @@ systemctl --user enable comic-translator
 loginctl enable-linger "$USER"
 ```
 
-설치와 동시에 활성화·시작하려면 **신규 설치에 한해** `--enable --start`를 명시할 수 있습니다. linger 설정에는 시스템 정책에 따라 관리자 권한이 필요할 수 있습니다.
+Linux에서 설치와 동시에 활성화·시작하려면 **신규 설치에 한해** `--enable --start`를 명시할 수 있습니다. linger 설정에는 시스템 정책에 따라 관리자 권한이 필요할 수 있습니다.
 
-systemd 없이 실행:
+macOS 또는 systemd 없이 실행:
 
 ```bash
 python3 scripts/install.py --engine koharu --no-systemd
@@ -129,13 +153,13 @@ python3 "$HOME/.config/comic-translator/run.py"
 | `--data-dir` | DB·원고·번역 결과·로그 보관 경로 |
 | `--config-dir` | 비밀 환경 파일과 실행기 보관 경로 |
 | `--service-name` | systemd 사용자 서비스 이름. 별도 인스턴스는 서로 다른 이름·포트·경로 사용 |
-| `--engine` | `koharu`(기본), `mangatranslator`, `both`, `none` |
+| `--engine` | `koharu`(기본), `mangatranslator`, `both`, `none`. macOS는 `koharu`/`none`만 |
 | `--python` | 웹 앱에 사용할 Python 3.12 이상 버전 또는 인터프리터 |
 | `--password-file` | 로그인 비밀번호를 읽을 파일. 명령 인자에 비밀번호 자체를 넣지 않음 |
 | `--non-interactive` | 질문 없이 설치. 필요한 인증은 파일 또는 설치기의 안전한 생성 방식 사용 |
-| `--no-systemd` | systemd 등록 없이 환경 파일·수동 실행기만 생성 |
-| `--enable` | 설치 후 사용자 서비스 자동 시작 활성화 |
-| `--start` | 설치 후 사용자 서비스 시작 |
+| `--no-systemd` | systemd 등록 없이 환경 파일·수동 실행기만 생성. macOS는 이 방식이 기본 |
+| `--enable` | Linux 설치 후 사용자 서비스 자동 시작 활성화 |
+| `--start` | Linux 설치 후 사용자 서비스 시작 |
 
 LAN용 대화형 설치 예시:
 
@@ -170,11 +194,15 @@ python3 scripts/install.py \
 ## 모델 준비·LLM 연결·첫 번역
 
 1. 웹 UI에 접속하고, 비밀번호를 설정했다면 로그인합니다.
-2. **모델 준비**에서 현재 캐시 위치를 확인하고 필요하면 절대 경로로 변경·저장합니다. 경로를 바꿔도 기존 캐시는 자동 이동하지 않으며 이후 다운로드는 새 경로를 사용합니다.
+2. **모델 준비** 상단의 **서버 플랫폼**에서 지원 엔진을 확인합니다. 접속한 브라우저가 아니라 서버 기준이며, Apple Silicon Mac은 Koharu/Metal, Linux는 NVIDIA CUDA 설치 경로를 안내합니다. 저장 위치가 맞는지 확인하고 필요하면 절대 경로로 변경·저장합니다. 경로를 바꿔도 기존 캐시는 자동 이동하지 않습니다.
 3. 승인 모델을 쓸 때만 Hugging Face 토큰을 비밀번호 입력란에 넣고 저장합니다. 저장한 토큰은 서버의 기존 환경 변수·토큰 파일보다 우선하며 다시 화면에 표시하지 않습니다. 저장한 토큰을 삭제하면 기존 서버 토큰으로 몰래 되돌아가지 않고 모델 준비에 토큰을 사용하지 않습니다. 모델 페이지에서 해당 계정의 접근 승인·약관 동의가 필요한 경우 미리 마치세요.
-4. 사용할 엔진·OCR·지우기 모델 프로필을 선택하고, 모델 저장소 목록과 다운로드 안내를 확인한 뒤 **명시적으로 다운로드를 시작**합니다. 진행·실패·준비 상태를 확인합니다. 모델을 일괄 무조건 다운로드하지 않습니다.
+4. **추천 조합**에서 **기본 번역(PaddleOCR-VL + LaMa)** 또는 **선택형 배경 복원(PaddleOCR-VL + FLUX.2 Klein)**을 고릅니다. FLUX는 추가 연산·메모리가 필요하며 원래 그림과 다른 내용이 생길 수 있습니다. 미준비 상태라면 **필수 모델 준비**를 누르고 저장소·파일·저장 위치를 확인한 뒤 다운로드를 승인합니다. 엔진 설치 상태와 필수 파일 준비 상태는 별도로 표시하며, 둘 다 실제 GPU 실행 성공을 보증하지는 않습니다.
 5. **LLM 제공자**에서 제공자·모델·인증 정보를 설정하고 **연결 테스트**로 실제 API 응답을 확인합니다. 로컬/OpenAI 호환 제공자는 먼저 서버의 `/models` 목록에서 설정 모델을 확인하며, 목록에 없거나 목록을 가져올 수 없으면 다른 모델의 답변을 성공으로 표시하지 않습니다.
-6. **새 번역**에서 준비한 엔진·옵션과 LLM 제공자를 선택합니다. 권한을 가진 원고 한두 장을 처리하고 결과 이미지를 직접 검토한 뒤 필요한 파일만 다운로드합니다.
+6. 준비가 끝난 조합의 **이 조합으로 새 번역**을 누르면 엔진·OCR·지우기 옵션이 채워집니다. LLM 제공자와 옵션을 확인하고, 권한을 가진 원고 한두 장을 처리한 뒤 결과 이미지를 직접 검토합니다. **새 번역** 메뉴에서 직접 옵션을 고를 수도 있습니다.
+
+추가 OCR·지우기 모델은 **필수·선택 모델 카탈로그**에서 용도별로 펼쳐 볼 수 있고, 저장소·리비전·파일 목록은 각 항목의 상세에 있습니다. 선택 모델을 전부 받을 필요는 없습니다. 카탈로그에서 파일을 다운로드하는 것만으로 다음 작업의 옵션이 바뀌지는 않으므로 새 번역에서 해당 모델을 선택하세요.
+
+**페이지 이미지를 LLM에 전달**을 켜면 OCR 텍스트와 페이지 이미지를 함께 보내 장면 문맥을 참고하게 합니다. 이미지 입력을 허용하지 않은 제공자로 바꾸면 꺼집니다. 다시 이미지 입력 제공자로 바꿔도 자동으로 켜지지 않으므로 작업 전에 확인하세요. 번역문 생성은 LLM이, 원문 지우기·배경 복원은 선택한 지우기 모델이 담당합니다.
 
 모델 가중치 다운로드는 번역 LLM 다운로드와 다릅니다. 앱은 LLM 가중치를 설치하지 않습니다. **새 Koharu 작업은 선택한 기본·추가 모델 파일이 지정된 캐시에 없으면 업로드 내용을 작업으로 저장하지 않고 준비 화면을 안내**합니다. 이전부터 사용하던 작업·캐시는 보호합니다. MangaTranslator 준비 항목은 확인된 말풍선/말풍선 밖 감지 모델 **일부만** 포함합니다. MT의 OCR·FLUX·기타 동적 의존성은 첫 사용 시 추가 다운로드될 수 있으며, 완료 표시가 전체 MT 엔진의 오프라인 준비나 GPU 추론 성공을 뜻하지 않습니다.
 

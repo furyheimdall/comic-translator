@@ -8,6 +8,7 @@ import csv
 import getpass
 import ipaddress
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -24,6 +25,9 @@ from pathlib import Path
 # job coincided with ~10 GiB of available-RAM swing; leave room to attempt it.
 DEDICATED_MIN_GIB = {"koharu": 8, "mangatranslator": 16, "both": 16}
 UNIFIED_MIN_GIB = {"koharu": 12, "mangatranslator": 24, "both": 24}
+# Mac policy is deliberately separate: total unified memory is a planning
+# budget, not an empirically established requirement or a free-memory cutoff.
+MAC_KOHARU_MIN_GIB = 16
 UNIFIED_GPU_RE = re.compile(r"\b(?:GB10|GH200)\b", re.IGNORECASE)
 GIB = 1024 ** 3
 
@@ -190,9 +194,58 @@ def _meminfo(path: Path = Path("/proc/meminfo")) -> tuple[int, int]:
     return values["MemAvailable"], values["MemTotal"]
 
 
+def check_platform(engine: str) -> None:
+    if sys.platform != "darwin" or engine == "none":
+        return
+    if engine != "koharu":
+        raise InstallError("macOS supports Koharu only; use --engine koharu or --engine none. "
+                           "MangaTranslator requires the Linux/NVIDIA installation.")
+    if platform.machine() != "arm64":
+        raise InstallError("macOS Koharu requires native Apple Silicon (arm64). "
+                           "Use a native Terminal/Python/Rust toolchain, not Rosetta; "
+                           "use --engine none for the web app only.")
+
+
+def _mac_memory() -> tuple[int, int]:
+    total_result = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True)
+    pages_result = subprocess.run(["vm_stat"], capture_output=True, text=True, check=True)
+    total_text = total_result.stdout.strip()
+    page_size = re.search(r"page size of (\d+) bytes", pages_result.stdout)
+    counts = dict(re.findall(r"^(Pages free|Pages inactive):\s+(\d+)\.\s*$",
+                             pages_result.stdout, re.MULTILINE))
+    if not total_text.isdecimal() or not page_size or not all(
+        key in counts for key in ("Pages free", "Pages inactive")
+    ):
+        raise InstallError("cannot measure Mac unified memory: invalid sysctl hw.memsize or vm_stat output")
+    total, size = int(total_text), int(page_size[1])
+    available = (int(counts["Pages free"]) + int(counts["Pages inactive"])) * size
+    if total <= 0 or size <= 0 or available > total:
+        raise InstallError("cannot measure Mac unified memory: inconsistent sysctl/vm_stat values")
+    return available, total
+
+
+def preflight_mac_memory() -> None:
+    available, total = _mac_memory()
+    print(f"Mac unified memory: total {total / GIB:.1f} GiB; conservative free + inactive "
+          f"estimate {available / GIB:.1f} GiB (sysctl hw.memsize, vm_stat page size/counts; "
+          "compressed memory, swap and other reclaimable pages are not counted).")
+    print(f"Koharu Mac planning policy: at least {MAC_KOHARU_MIN_GIB} GiB total unified memory, "
+          "not an empirically established Mac requirement. Available memory is advisory only; "
+          "this does not guarantee inference or concurrent LLM capacity.")
+    if total < MAC_KOHARU_MIN_GIB * GIB:
+        raise InstallError(f"Koharu Mac planning policy requires at least {MAC_KOHARU_MIN_GIB} GiB total "
+                           "unified memory; use --engine none for the web app only.")
+    print("Memory advisory: close competing applications before inference; model loading and "
+          "runtime memory pressure still determine whether a job can complete.")
+
+
 def preflight_gpu_memory(engine: str) -> None:
+    check_platform(engine)
     if engine == "none":
         print("GPU 사전 검사 생략: --engine none (웹 앱만 설치, GPU 엔진 미설치).")
+        return
+    if sys.platform == "darwin":
+        preflight_mac_memory()
         return
     require_executable("nvidia-smi")
     gpu_list = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True)
@@ -252,20 +305,41 @@ def check_prerequisites(engine: str, use_systemd: bool) -> None:
         if engine in {"koharu", "both"} and not (ROOT / "engines/koharu/quality.patch").is_file():
             raise InstallError("Koharu source patch is missing")
     if engine in {"koharu", "both"}:
-        for command in ("rustup", "gcc", "ldconfig", "sed"):
-            require_executable(command)
-        clang_dir = Path(os.environ.get("LIBCLANG_PATH") or max(
-            (str(folder) for folder in Path("/usr/lib").glob("llvm-*/lib") if list(folder.glob("libclang.so*"))),
-            default="",
-        ))
-        if not clang_dir.is_dir() or not list(clang_dir.glob("libclang.so*")):
-            raise InstallError("Koharu requires libclang (or LIBCLANG_PATH)")
-        fontconfig = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, check=True)
-        if "libfontconfig.so.1 " not in fontconfig.stdout:
-            raise InstallError("Koharu requires libfontconfig.so.1")
-        gcc_include = subprocess.run(["gcc", "-print-file-name=include/stddef.h"], capture_output=True, text=True, check=True).stdout.strip()
-        if not Path(gcc_include).is_file():
-            raise InstallError("Koharu requires GCC's stddef.h")
+        require_executable("rustup")
+        require_executable("python3")
+        if sys.platform == "darwin":
+            for command in ("xcrun", "pkg-config"):
+                require_executable(command)
+            try:
+                clang = Path(subprocess.run(
+                    ["xcrun", "--find", "clang"], capture_output=True, text=True, check=True,
+                ).stdout.strip())
+                sdk = Path(subprocess.run(
+                    ["xcrun", "--sdk", "macosx", "--show-sdk-path"], capture_output=True, text=True, check=True,
+                ).stdout.strip())
+            except subprocess.CalledProcessError as exc:
+                raise InstallError("Koharu requires selected Xcode Command Line Tools "
+                                   "(xcode-select --install; check xcode-select -p)") from exc
+            if not clang.is_file() or not sdk.is_dir():
+                raise InstallError("Koharu requires Xcode Command Line Tools (xcode-select --install)")
+            clang_dir = Path(os.environ.get("LIBCLANG_PATH") or clang.parent.parent / "lib")
+            if not clang_dir.is_dir() or not list(clang_dir.glob("libclang*.dylib")):
+                raise InstallError("Koharu requires Xcode libclang.dylib (or LIBCLANG_PATH)")
+        else:
+            for command in ("gcc", "ldconfig"):
+                require_executable(command)
+            clang_dir = Path(os.environ.get("LIBCLANG_PATH") or max(
+                (str(folder) for folder in Path("/usr/lib").glob("llvm-*/lib") if list(folder.glob("libclang.so*"))),
+                default="",
+            ))
+            if not clang_dir.is_dir() or not list(clang_dir.glob("libclang.so*")):
+                raise InstallError("Koharu requires libclang (or LIBCLANG_PATH)")
+            fontconfig = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, check=True)
+            if "libfontconfig.so.1 " not in fontconfig.stdout:
+                raise InstallError("Koharu requires libfontconfig.so.1")
+            gcc_include = subprocess.run(["gcc", "-print-file-name=include/stddef.h"], capture_output=True, text=True, check=True).stdout.strip()
+            if not Path(gcc_include).is_file():
+                raise InstallError("Koharu requires GCC's stddef.h")
         if not (ROOT / "engines/koharu/ct_batch.rs").is_file():
             raise InstallError("Koharu batch driver is missing")
     if engine in {"mangatranslator", "both"}:
@@ -335,14 +409,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--python", default="3.13", help="web Python interpreter or uv Python version (>=3.12)")
     parser.add_argument("--password-file", type=Path, help="read web login password from a file, never from argv")
     parser.add_argument("--non-interactive", action="store_true")
-    parser.add_argument("--no-systemd", action="store_true", help="create only a manual launcher")
+    parser.add_argument("--no-systemd", action="store_true", help="create only a manual launcher (default on macOS)")
     parser.add_argument("--enable", action="store_true", help="explicitly enable the user service")
     parser.add_argument("--start", action="store_true", help="explicitly start the user service")
     return parser.parse_args(argv)
 
 
 def install(args: argparse.Namespace) -> None:
-    if args.no_systemd and (args.enable or args.start):
+    check_platform(args.engine)
+    if sys.platform == "darwin" and (args.enable or args.start):
+        raise InstallError("--enable and --start are unavailable on macOS; use the generated manual launcher (no systemd/launchd service).")
+    use_systemd = sys.platform != "darwin" and not args.no_systemd
+    if not use_systemd and (args.enable or args.start):
         raise InstallError("--enable and --start require systemd (omit --no-systemd)")
     data = safe_path(args.data_dir)
     config = safe_path(args.config_dir)
@@ -350,7 +428,7 @@ def install(args: argparse.Namespace) -> None:
     launcher = config / "run.py"
     xdg_config = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     unit = safe_path(Path(xdg_config) / "systemd/user" / f"{args.service_name}.service")
-    targets = [env_file, launcher] + ([] if args.no_systemd else [unit])
+    targets = [env_file, launcher] + ([unit] if use_systemd else [])
     for path in targets:
         if path.exists() or path.is_symlink():
             raise InstallError(f"refusing to replace existing file: {path}")
@@ -359,7 +437,7 @@ def install(args: argparse.Namespace) -> None:
             raise InstallError(f"not a directory: {directory}")
     if data.exists() and any(data.iterdir()):
         raise InstallError(f"refusing nonempty data directory: {data}; use a fresh path and migrate only after stopping any existing service")
-    if not args.no_systemd and unit.parent.exists() and not unit.parent.is_dir():
+    if use_systemd and unit.parent.exists() and not unit.parent.is_dir():
         raise InstallError(f"not a directory: {unit.parent}")
     if (ROOT / ".venv").exists() or (ROOT / ".venv").is_symlink():
         raise InstallError(f"refusing to modify an existing source environment: {ROOT / '.venv'}")
@@ -368,7 +446,7 @@ def install(args: argparse.Namespace) -> None:
             raise InstallError(f"source checkout incomplete: {item}")
     validate_python(args.python)
     preflight_gpu_memory(args.engine)
-    check_prerequisites(args.engine, not args.no_systemd)
+    check_prerequisites(args.engine, use_systemd)
     password = read_secret(safe_path(args.password_file), "password") if args.password_file else None
     is_local = args.host == "127.0.0.1"
     generated_password = False
@@ -407,11 +485,11 @@ def install(args: argparse.Namespace) -> None:
             subprocess.run(["bash", str(ROOT / "scripts" / script)], cwd=ROOT, check=True)
     for directory in (data, config):
         ensure_private_dir(directory)
-    if not args.no_systemd:
+    if use_systemd:
         unit.parent.mkdir(parents=True, exist_ok=True)
     create_new(env_file, environment, 0o600)
     create_new(launcher, launcher_source(env_file), 0o700)
-    if not args.no_systemd:
+    if use_systemd:
         create_new(unit, service, 0o644)
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
         if args.enable:
@@ -422,7 +500,7 @@ def install(args: argparse.Namespace) -> None:
     print(f"EnvironmentFile (private): {env_file}")
     if generated_password:
         print("A login password was generated and stored only in the private EnvironmentFile; retrieve it locally before logging in.")
-    if args.no_systemd:
+    if not use_systemd:
         print(f"Manual start (not started): {launcher}")
     else:
         print(f"User service: {args.service_name}.service (enable={args.enable}, start={args.start})")

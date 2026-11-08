@@ -54,6 +54,9 @@ struct Arguments {
     /// Private intermediate checkpoints; omit to retain the ordinary full pipeline.
     #[arg(long)]
     cache_dir: Option<PathBuf>,
+    /// Shared model/runtime store; explicit because macOS ignores XDG_CACHE_HOME.
+    #[arg(long, env = "CT_KOHARU_CACHE_DIR")]
+    runtime_cache_dir: Option<PathBuf>,
     /// OpenAI-compatible base URL, e.g. http://127.0.0.1:18710/llm/v1
     #[arg(long)]
     base_url: url::Url,
@@ -374,6 +377,9 @@ async fn execute_stages(
 #[tokio::main]
 async fn main() -> Result<()> {
     let arguments = Arguments::parse();
+    if let Some(path) = &arguments.runtime_cache_dir {
+        koharu_runtime::Store::configure(path)?;
+    }
     let images = list_images(&arguments.input_dir)?;
     if images.is_empty() && !arguments.watch {
         bail!("no images in {}", arguments.input_dir.display());
@@ -382,11 +388,12 @@ async fn main() -> Result<()> {
 
     // Koharu's OpenAI-compatible backend reads its bearer token from the secret store.
     koharu_secrets::set("openai-compatible", &arguments.api_key.as_str().into())
-        .context("failed to store the endpoint key in the Linux keyring")?;
+        .context("failed to store the endpoint key in the platform credential store")?;
 
-    emit(0.0, "Koharu 런타임 초기화 중 (첫 실행 시 CUDA/Torch 패키지와 모델을 내려받습니다)");
+    emit(0.0, "Koharu 런타임 초기화 중 (첫 실행 시 플랫폼별 Torch/추론 패키지와 모델을 내려받습니다)");
     koharu_ml::init().await.context("Koharu runtime initialization failed")?;
     let device = koharu_ml::device(false);
+    emit(0.0, format!("Koharu 추론 장치: {:?}", device));
 
     // `OpenAiCompatibleConfig` is not re-exported; go through the serde shape
     // used by `~/.koharu/config.toml` (`[providers.openai-compatible]`).

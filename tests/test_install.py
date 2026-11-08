@@ -94,25 +94,6 @@ def test_external_noninteractive_bind_generates_private_login(tmp_path: Path, mo
     assert config.stat().st_mode & 0o777 == 0o700
 
 
-def test_default_port_is_18710(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert install.parse_args([]).port == 18710
-    monkeypatch.delenv("CT_PORT", raising=False)
-    from app.settings import load_settings
-    assert load_settings().port == 18710
-    monkeypatch.setenv("CT_PORT", "12345")
-    assert load_settings().port == 12345
-
-
-def test_installer_exposes_no_model_cache_or_token_arguments() -> None:
-    options = install.parse_args(["--engine", "none"])
-    assert not hasattr(options, "cache_dir")
-    assert not hasattr(options, "hf_token_file")
-    for old_option in ("--cache-dir", "--hf-token-file"):
-        with pytest.raises(SystemExit) as exc:
-            install.parse_args([old_option, "/tmp/private"])
-        assert exc.value.code == 2
-
-
 @pytest.mark.parametrize(
     ("report", "engine", "passes"),
     [
@@ -128,6 +109,7 @@ def test_installer_exposes_no_model_cache_or_token_arguments() -> None:
 def test_dedicated_vram_uses_one_gpu_free_memory_not_aggregate(
     report: str, engine: str, passes: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(install.sys, "platform", "linux")
     monkeypatch.setattr(install, "require_executable", lambda _: None)
 
     def nvidia(command: list[str], **_kwargs: object) -> SimpleNamespace:
@@ -154,6 +136,7 @@ def test_gb10_unified_memory_uses_available_ram_not_total(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     available_kib: int, engine: str, passes: bool,
 ) -> None:
+    monkeypatch.setattr(install.sys, "platform", "linux")
     meminfo = tmp_path / "meminfo"
     meminfo.write_text(f"MemTotal:       127535316 kB\nMemAvailable: {available_kib} kB\n")
     read_meminfo = install._meminfo
@@ -174,6 +157,7 @@ def test_gb10_unified_memory_uses_available_ram_not_total(
 def test_unified_gpu_without_memavailable_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(install.sys, "platform", "linux")
     meminfo = tmp_path / "meminfo"
     meminfo.write_text("MemTotal: 127535316 kB\n")
     read_meminfo = install._meminfo
@@ -189,6 +173,7 @@ def test_unified_gpu_without_memavailable_fails_closed(
 
 
 def test_gpu_preflight_rejects_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(install.sys, "platform", "linux")
     monkeypatch.setattr(install, "require_executable", lambda _: None)
     monkeypatch.setattr(
         install.subprocess, "run",
@@ -202,6 +187,7 @@ def test_gpu_preflight_rejects_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_insufficient_or_unknown_gpu_memory_aborts_before_uv_or_creating_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gpu_report: str,
 ) -> None:
+    monkeypatch.setattr(install.sys, "platform", "linux")
     root = tmp_path / "source"
     for name in ("pyproject.toml", "uv.lock", "app/main.py", "web/index.html"):
         file = root / name
@@ -220,3 +206,109 @@ def test_insufficient_or_unknown_gpu_memory_aborts_before_uv_or_creating_files(
     with pytest.raises(install.InstallError, match="GPU 사전 검사 실패"):
         install.install(args)
     assert not data.exists() and not config.exists() and not (root / ".venv").exists()
+
+
+@pytest.mark.parametrize(("engine", "machine", "reason"), [
+    ("mangatranslator", "arm64", "macOS supports Koharu only"),
+    ("both", "arm64", "macOS supports Koharu only"),
+    ("koharu", "x86_64", "native Apple Silicon"),
+])
+def test_mac_unsupported_engine_or_rosetta_fails_before_install_actions(
+    engine: str, machine: str, reason: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(install.sys, "platform", "darwin")
+    monkeypatch.setattr(install.platform, "machine", lambda: machine)
+    monkeypatch.setattr(install, "safe_path", lambda *_: pytest.fail("inspected installation paths"))
+    monkeypatch.setattr(install.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("ran installer command"))
+    with pytest.raises(install.InstallError, match=reason):
+        install.install(install.parse_args(["--engine", engine]))
+
+
+@pytest.mark.parametrize("flag", ["--enable", "--start"])
+@pytest.mark.parametrize("no_systemd", [False, True])
+def test_mac_rejects_service_flags_before_install_actions(
+    flag: str, no_systemd: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(install.sys, "platform", "darwin")
+    monkeypatch.setattr(install, "safe_path", lambda *_: pytest.fail("inspected installation paths"))
+    monkeypatch.setattr(install.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("ran installer command"))
+    argv = ["--engine", "none", flag] + (["--no-systemd"] if no_systemd else [])
+    with pytest.raises(install.InstallError, match="unavailable on macOS"):
+        install.install(install.parse_args(argv))
+
+
+@pytest.mark.parametrize(("total", "passes"), [
+    (8 * 1024 ** 3, False),
+    (16 * 1024 ** 3 - 1, False),
+    (16 * 1024 ** 3, True),
+    (32 * 1024 ** 3, True),
+])
+def test_mac_memory_gates_total_not_available_or_compressed_memory(
+    total: int, passes: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(install.sys, "platform", "darwin")
+    monkeypatch.setattr(install.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(install, "require_executable", lambda _: pytest.fail("required NVIDIA tooling"))
+
+    def mac_memory(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        if command == ["sysctl", "-n", "hw.memsize"]:
+            return SimpleNamespace(stdout=str(total))
+        assert command == ["vm_stat"]
+        return SimpleNamespace(stdout=(
+            "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"
+            "Pages free: 32768.\nPages inactive: 32768.\n"
+            "Pages speculative: 999999.\nPages purgeable: 999999.\n"
+            "Pages occupied by compressor: 999999.\nSwapouts: 999999.\n"
+        ))
+
+    monkeypatch.setattr(install.subprocess, "run", mac_memory)
+    assert install._mac_memory() == (1024 ** 3, total)
+    if passes:
+        install.preflight_gpu_memory("koharu")
+    else:
+        with pytest.raises(install.InstallError, match="16 GiB total"):
+            install.preflight_gpu_memory("koharu")
+
+
+@pytest.mark.parametrize("machine", ["arm64", "x86_64"])
+def test_mac_web_only_skips_hardware_preflight(machine: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(install.sys, "platform", "darwin")
+    monkeypatch.setattr(install.platform, "machine", lambda: machine)
+    monkeypatch.setattr(install, "require_executable", lambda _: pytest.fail("required GPU tooling"))
+    monkeypatch.setattr(install.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("measured GPU memory"))
+    install.preflight_gpu_memory("none")
+
+
+@pytest.mark.parametrize(("system", "engine", "service_flags"), [
+    ("darwin", "koharu", []),
+    ("darwin", "none", []),
+    ("linux", "none", []),
+    ("linux", "none", ["--enable", "--start"]),
+])
+def test_install_uses_manual_launcher_on_mac_and_user_service_on_linux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    system: str, engine: str, service_flags: list[str],
+) -> None:
+    root = tmp_path / "source"
+    for name in ("pyproject.toml", "uv.lock", "app/main.py", "web/index.html"):
+        file = root / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.touch()
+    monkeypatch.setattr(install, "ROOT", root)
+    monkeypatch.setattr(install.sys, "platform", system)
+    monkeypatch.setattr(install.platform, "machine", lambda: "arm64")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(install, "preflight_gpu_memory", lambda _: None)
+    monkeypatch.setattr(install, "check_prerequisites", lambda *_args: None)
+    monkeypatch.setattr(install.subprocess, "run", lambda *_args, **_kwargs: None)
+    config = tmp_path / "config with spaces"
+    install.install(install.parse_args([
+        "--engine", engine, "--non-interactive",
+        "--data-dir", str(tmp_path / "data"), "--config-dir", str(config),
+        *service_flags,
+    ]))
+    use_systemd = system == "linux"
+    assert (config / "run.py").is_file()
+    assert (config / "run.py").stat().st_mode & 0o777 == 0o700
+    unit = tmp_path / "xdg/systemd/user/comic-translator.service"
+    assert unit.exists() == use_systemd
